@@ -9,4 +9,4 @@ An elaborate cross plattform streaming toolkit to send very abstracted but
 typesafe messages from one network client to the next, even cross plattform and
 it's all header only
 ** Examples
-For examples please refer to [[./tcp_server.cpp][tcp_server.cpp]] and [[./tcp_client.cpp][tcp_client.cpp]].
+For examples please refer to [[examples/tcp_server.cpp][tcp_server.cpp]] and [[examples/tcp_client.cpp][tcp_client.cpp]].
