@@ -1,0 +1,12 @@
+* Inetstream
+C++ Stream interface for networking
+For usage see below
+** What this is
+A simple header only networking API to send and receive simple messages from
+Linux to Linux
+** What this is not / What you can make out of this
+An elaborate cross plattform streaming toolkit to send very abstracted but
+typesafe messages from one network client to the next, even cross plattform and
+it's all header only
+** Examples
+For examples please refer to [[./tcp_server.cpp][tcp_server.cpp]] and [[./tcp_client.cpp][tcp_client.cpp]].
