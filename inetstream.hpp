@@ -301,6 +301,7 @@ namespace inet {
 		port[5] = 0;
 		int rv = getaddrinfo(NULL, port, &hints, &servinfo);
 		if (rv != 0) {
+			freeaddrinfo(servinfo);
 			throw std::system_error {rv, std::system_category(), gai_strerror(rv)};
 		}
 		addrinfo* p;
@@ -313,6 +314,7 @@ namespace inet {
 			int yes = 1; rv = 0;
 			rv = setsockopt(_socket_fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int));
 			if (rv == -1) {
+				freeaddrinfo(servinfo);
 				throw std::system_error {errno, std::system_category(), strerror(errno)};
 			}
 			if (bind(_socket_fd, p->ai_addr, p->ai_addrlen) == -1) {
@@ -366,6 +368,7 @@ namespace inet {
 		port[5] = 0;
 		int rv = getaddrinfo(_host.c_str(), port, &hints, &servinfo);
 		if (rv != 0) {
+			freeaddrinfo(servinfo);
 			throw std::system_error {rv, std::system_category(), gai_strerror(rv)};
 		}
 		addrinfo* p;
@@ -383,6 +386,7 @@ namespace inet {
 			break;
 		}
 		if (p == NULL) {
+			freeaddrinfo(servinfo);
 			throw std::system_error {errno, std::system_category(), strerror(errno)};
 		}
 		char s[INET6_ADDRSTRLEN];
@@ -390,9 +394,11 @@ namespace inet {
 									get_in_addr((sockaddr*)p->ai_addr),
 									s, sizeof s);
 		if (rvp == NULL) {
+			freeaddrinfo(servinfo);
 			throw std::system_error {errno, std::system_category(), strerror(errno)};
 		}
 		if (fcntl(_socket_fd, F_SETFL, O_NONBLOCK) != 0) {
+			freeaddrinfo(servinfo);
 			throw std::system_error {errno, std::system_category(), strerror(errno)};
 		}
 		freeaddrinfo(servinfo);
