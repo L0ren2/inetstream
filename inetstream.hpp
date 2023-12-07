@@ -6,7 +6,6 @@
 // C
 #include <cstring>
 #include <cerrno>
-#include <cassert>
 // System
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -56,6 +55,8 @@ namespace inet {
     
     class inetstream {
     public:
+	inetstream() = delete;
+	inetstream(const inetstream&) = delete;
 	inetstream(inetstream&&);
 	~inetstream();
 	/**
@@ -78,8 +79,10 @@ namespace inet {
 	/**
 	 * receives network data, populating the stream with data
 	 *
+	 * @param s number of bytes to try and receive
+	 * @return the number of bytes received
 	 */
-	void recv();
+	std::size_t recv(std::size_t s);
 	bool empty() const { return size() == 0; }
 	void clear() { _buf.clear(); _read_pos = _buf.begin(); }
 	std::size_t size() const { return _buf.end() - _read_pos; }
@@ -99,28 +102,33 @@ namespace inet {
 	}
 	return str;
     }
-    template <> inetstream& operator<<(inetstream&, std::string);
-    template <> inetstream& operator<<(inetstream&, const char*);
+    template <> inetstream& operator<< (inetstream&, std::string);
+    template <> inetstream& operator<< (inetstream&, const char*);
     template <> inetstream& operator<< (inetstream&, uint16_t);
-    template <> inetstream& operator<<(inetstream&, uint32_t);
-    template <> inetstream& operator<<(inetstream&, uint64_t);
-    template <> inetstream& operator<<(inetstream&, int);
+    template <> inetstream& operator<< (inetstream&, uint32_t);
+    template <> inetstream& operator<< (inetstream&, uint64_t);
+    template <> inetstream& operator<< (inetstream&, int);
     
     template <typename T>
     void operator>>(inetstream& str, T& t) {
 	constexpr std::size_t sz = sizeof t;
-	assert(str.size() >= sz);
+	if (str.size() < sz) {
+	    std::stringstream ss;
+	    ss << "tried to read " << sz << " bytes into variable but only got "
+	       << str.size() << " bytes";
+	    throw std::runtime_error {ss.str()};
+	}
 	T tmp {};
 	for (std::size_t i {0}; i < sz; ++i) {
 	    *(reinterpret_cast<byte*>(&tmp) + i) = *str._read_pos++;
 	}
 	t = tmp;
     }
-    template <> void operator>>(inetstream&, std::string&);
+    template <> void operator>> (inetstream&, std::string&);
     template <> void operator>> (inetstream&, uint16_t&);
-    template <> void operator>>(inetstream&, uint32_t&);
-    template <> void operator>>(inetstream&, uint64_t&);
-    template <> void operator>>(inetstream&, int&);
+    template <> void operator>> (inetstream&, uint32_t&);
+    template <> void operator>> (inetstream&, uint64_t&);
+    template <> void operator>> (inetstream&, int&);
     
 } // namespace inet
 #endif
@@ -227,7 +235,12 @@ namespace inet {
     }
     template <> void operator>> (inetstream& str, uint16_t& us) {
 	constexpr std::size_t sz = sizeof us;
-	assert(str.size() >= sz);
+	if (str.size() < sz) {
+	    std::stringstream ss;
+	    ss << "tried to read " << sz << " bytes into variable but only got "
+	       << str.size() << " bytes";
+	    throw std::runtime_error {ss.str()};
+	}
 	union {
 	    uint16_t i;
 	    byte b[sz];
@@ -239,7 +252,12 @@ namespace inet {
     }
     template <> void operator>> (inetstream& str, uint32_t& ul) {
 	constexpr std::size_t sz = sizeof ul;
-	assert(str.size() >= sz);
+	if (str.size() < sz) {
+	    std::stringstream ss;
+	    ss << "tried to read " << sz << " bytes into variable but only got "
+	       << str.size() << " bytes";
+	    throw std::runtime_error {ss.str()};
+	}
 	union {
 	    uint32_t i;
 	    byte b[sz];
@@ -251,7 +269,12 @@ namespace inet {
     }
     template <> void operator>> (inetstream& str, uint64_t& ull) {
 	constexpr std::size_t sz = sizeof ull;
-	assert(str.size() >= sz);
+	if (str.size() < sz) {
+	    std::stringstream ss;
+	    ss << "tried to read " << sz << " bytes into variable but only got "
+	       << str.size() << " bytes";
+	    throw std::runtime_error {ss.str()};
+	}
 	uint32_t tmp {0};
 	uint64_t utmp {0};
 	// lsb
@@ -435,14 +458,23 @@ namespace inet {
 	} while (total > 0);
 	this->clear();
     }
-    void inetstream::recv() {
+    std::size_t inetstream::recv(std::size_t sz) {
 	std::chrono::milliseconds timeout {MAX_INET_TIMEOUT_MS};
 	auto t_end = std::chrono::system_clock::now() + timeout;
-	this->clear();
-	constexpr std::size_t sz {1024};
-	std::array<unsigned char, sz> buf;
+	auto tmp_size = this->size();
+	constexpr const std::size_t SZ {1024};
+	int read {0};
+	std::array<unsigned char, SZ> buf;
 	do {
-	    int read = ::recv(_socket_fd, &buf[0], sz - 1, 0);
+	    if (sz < SZ) {
+		read = ::recv(_socket_fd, &buf[0], sz, 0);
+	    }
+	    else {
+		read = ::recv(_socket_fd, &buf[0], SZ - 1, 0);
+		if (read > 0) {
+		    sz -= read;
+		}
+	    }
 	    if (read == -1) {
 		if (errno == EAGAIN || errno == EWOULDBLOCK) {
 		    if (std::chrono::system_clock::now() < t_end) {
@@ -458,7 +490,8 @@ namespace inet {
 		break;
 	    }
 	} while (std::chrono::system_clock::now() < t_end);
-	_read_pos = _buf.begin();
+	_read_pos = _buf.begin() + tmp_size;
+	return _buf.size() - tmp_size;
     }
 } // namespace inet
 #endif

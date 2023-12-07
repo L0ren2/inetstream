@@ -27,7 +27,7 @@ SCENARIO("communicating between server and client") {
 	std::this_thread::sleep_for(std::chrono::milliseconds{100});
 	inet::client client{"127.0.0.1", 3491};
 	auto istr = client.connect();
-	istr.recv();
+	REQUIRE(4 == istr.recv(4));
 	uint32_t i;
 	istr >> i;
 	REQUIRE(i == 0x01020304);
@@ -50,7 +50,7 @@ SCENARIO("communicating between client and server") {
     }};
     inet::server server{3492};
     auto istr = server.accept();
-    istr.recv();
+    REQUIRE(4 == istr.recv(4));
     uint32_t i;
     istr >> i;
     REQUIRE(i == 0x01020304);
@@ -63,7 +63,7 @@ SCENARIO("same as above but tests uint16") {
 	std::this_thread::sleep_for(std::chrono::milliseconds{100});
 	inet::client client{"127.0.0.1", 3493};
 	auto istr = client.connect();
-	istr.recv();
+	REQUIRE(2 == istr.recv(2));
 	uint16_t i;
 	istr >> i;
 	REQUIRE(i == 0x0102);
@@ -86,7 +86,7 @@ SCENARIO("same as above but tests uint16 vice versa") {
     }};
     inet::server server{3494};
     auto istr = server.accept();
-    istr.recv();
+    REQUIRE(2 == istr.recv(2));
     uint16_t i;
     istr >> i;
     REQUIRE(i == 0x0102);
@@ -99,8 +99,7 @@ SCENARIO("same as above but tests uint64") {
 	std::this_thread::sleep_for(std::chrono::milliseconds{100});
 	inet::client client{"127.0.0.1", 3495};
 	auto istr = client.connect();
-	istr.recv();
-	REQUIRE(istr.size() == sizeof(uint64_t));
+	REQUIRE(8 == istr.recv(8));
 	uint64_t i;
 	istr >> i;
 	REQUIRE(i == 0x0102030405060708);
@@ -123,7 +122,7 @@ SCENARIO("same as above but tests uint64 vice versa") {
     }};
     inet::server server{3496};
     auto istr = server.accept();
-    istr.recv();
+    REQUIRE(8 == istr.recv(8));
     uint64_t i;
     istr >> i;
     REQUIRE(i == 0x0102030405060708);
@@ -137,7 +136,7 @@ SCENARIO("same as above but tests byte") {
 	std::this_thread::sleep_for(std::chrono::milliseconds{100});
 	inet::client client{"127.0.0.1", 3497};
 	auto istr = client.connect();
-	istr.recv();
+	REQUIRE(1 == istr.recv(1));
 	byte i;
 	istr >> i;
 	REQUIRE(i == 0x42);
@@ -161,7 +160,7 @@ SCENARIO("same as above but tests byte vice versa") {
     }};
     inet::server server{3498};
     auto istr = server.accept();
-    istr.recv();
+    REQUIRE(1 == istr.recv(1));
     byte i;
     istr >> i;
     REQUIRE(i == 0x42);
@@ -174,7 +173,8 @@ SCENARIO("same as above but tests char*") {
 	std::this_thread::sleep_for(std::chrono::milliseconds{100});
 	inet::client client{"127.0.0.1", 3499};
 	auto istr = client.connect();
-	istr.recv();
+	// might recv less than requested
+	REQUIRE(istr.recv(sizeof("Hello, World!")) <= sizeof("Hello, World!"));
 	std::string s;
 	istr >> s;
 	REQUIRE(s == "Hello, World!");
@@ -197,7 +197,8 @@ SCENARIO("same as above but tests char* vice versa") {
     }};
     inet::server server{3500};
     auto istr = server.accept();
-    istr.recv();
+    // might recv less than requested
+    REQUIRE(istr.recv(sizeof("Hello, World!")) <= sizeof("Hello, World!"));
     std::string s;
     istr >> s;
     REQUIRE(s == "Hello, World!");
@@ -210,7 +211,8 @@ SCENARIO("same as above but tests std::string") {
 	std::this_thread::sleep_for(std::chrono::milliseconds{100});
 	inet::client client{"127.0.0.1", 3501};
 	auto istr = client.connect();
-	istr.recv();
+	// might recv less than requested
+	REQUIRE(istr.recv(sizeof("Hello, World!")) <= sizeof("Hello, World!"));
 	std::string str{};
 	istr >> str;
 	REQUIRE(str == "Hello, World!");
@@ -233,7 +235,8 @@ SCENARIO("same as above but tests std::string vice versa") {
     }};
     inet::server server{3502};
     auto istr = server.accept();
-    istr.recv();
+    // might recv less than requested
+    REQUIRE(istr.recv(sizeof("Hello, World!")) <= sizeof("Hello, World!"));
     std::string str{};
     istr >> str;
     REQUIRE(str == "Hello, World!");
@@ -259,7 +262,7 @@ SCENARIO("same as above but tests widget") {
 	std::this_thread::sleep_for(std::chrono::milliseconds{100});
 	inet::client client{"127.0.0.1", 3503};
 	auto istr = client.connect();
-	istr.recv();
+	REQUIRE(istr.recv(sizeof(widget)) <= sizeof(widget));
 	widget v;
 	REQUIRE(v.x() == 42);
 	REQUIRE(v.y() == 1337);
@@ -289,7 +292,7 @@ SCENARIO("same as above but tests widget vice versa") {
     }};
     inet::server server{3504};
     auto istr = server.accept();
-    istr.recv();
+    REQUIRE(istr.recv(sizeof(widget)) <= sizeof(widget));
     std::string str{};
     widget v;
     REQUIRE(v.x() == 42);
@@ -311,7 +314,7 @@ TEST_CASE("send and receive multiple messages") {
 	istr.send();
 	istr.clear();
 	std::this_thread::sleep_for(std::chrono::milliseconds{20});
-	istr.recv();
+	REQUIRE(4 == istr.recv(4));
 	istr >> i;
 	REQUIRE(i == 1337);
 	istr.clear();
@@ -319,7 +322,8 @@ TEST_CASE("send and receive multiple messages") {
 	istr.send();
 	istr.clear();
 	std::this_thread::sleep_for(std::chrono::milliseconds{20});
-	istr.recv();
+	// may recv less than requested
+	REQUIRE(istr.recv(sizeof("Hello")) <= sizeof("Hello"));
 	std::string s;
 	istr >> s;
 	REQUIRE(s == "Hello");
@@ -330,7 +334,7 @@ TEST_CASE("send and receive multiple messages") {
     inet::server server{3505};
     auto istr = server.accept();
 	int j {};
-    istr.recv();
+	REQUIRE(4 == istr.recv(4));
 	istr >> j;
 	REQUIRE(j == 42);
 	j = 1337;
@@ -339,11 +343,30 @@ TEST_CASE("send and receive multiple messages") {
 	istr.send();
 	istr.clear();
 	std::this_thread::sleep_for(std::chrono::milliseconds{20});
-	istr.recv();
+	// may recv less than requested
+	REQUIRE(istr.recv(sizeof("Hello")) <= sizeof("Hello"));
 	istr >> j;
 	REQUIRE(j == 0);
 	istr.clear();
 	istr << "Hello";
 	istr.send();
+    t.join();
+}
+TEST_CASE("test receiving more than there is to get") {
+    std::thread t {[] {
+	std::this_thread::sleep_for(std::chrono::milliseconds{100});
+	inet::client client{"127.0.0.1", 3506};
+	auto istr = client.connect();
+	int i {42};
+	istr << i;
+	istr.send();
+    }};
+    inet::server server{3506};
+    auto istr = server.accept();
+    INFO("should only receive 4 bytes even though 8 are requested, because only 4 are sent");
+    REQUIRE(4 == istr.recv(8));
+    int i;
+    istr >> i;
+    REQUIRE(i == 42);
     t.join();
 }
