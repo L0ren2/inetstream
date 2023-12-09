@@ -461,7 +461,9 @@ namespace inet {
     std::size_t inetstream::recv(std::size_t sz) {
 	std::chrono::milliseconds timeout {MAX_INET_TIMEOUT_MS};
 	auto t_end = std::chrono::system_clock::now() + timeout;
-	auto tmp_size = this->size();
+	// cache read_pos pointer, since _buf may realloc
+	auto read_offset_ = _read_pos - _buf.begin(); 
+	auto tmp_size = _buf.size();
 	constexpr const std::size_t SZ {1024};
 	int read {0};
 	std::array<unsigned char, SZ> buf;
@@ -490,7 +492,7 @@ namespace inet {
 		break;
 	    }
 	} while (std::chrono::system_clock::now() < t_end);
-	_read_pos = _buf.begin() + tmp_size;
+	_read_pos = _buf.begin() + read_offset_;
 	return _buf.size() - tmp_size;
     }
 } // namespace inet

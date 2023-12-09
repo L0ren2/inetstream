@@ -363,10 +363,71 @@ TEST_CASE("test receiving more than there is to get") {
     }};
     inet::server server{3506};
     auto istr = server.accept();
-    INFO("should only receive 4 bytes even though 8 are requested, because only 4 are sent");
+    INFO("should receive 4 bytes even though 8 requested, because only 4 are sent");
     REQUIRE(4 == istr.recv(8));
     int i;
     istr >> i;
     REQUIRE(i == 42);
+    t.join();
+}
+TEST_CASE("test receiving twice, then reading all data on stream") {
+    std::thread t {[] {
+	std::this_thread::sleep_for(std::chrono::milliseconds{50});
+	inet::client client{"127.0.0.1", 3507};
+	auto istr = client.connect();
+	int i_1 {42}, i_2 {1337};
+	istr << i_1;
+	istr.send();
+	std::this_thread::sleep_for(std::chrono::milliseconds{100});
+	istr.clear();
+	istr << i_2;
+	istr.send();
+    }};
+    inet::server server{3507};
+    auto istr = server.accept();
+    INFO("should receive 4 bytes even though 8 requested, because only 4 are sent");
+    REQUIRE(4 == istr.recv(8));
+    REQUIRE(istr.size() == 4);
+    std::this_thread::sleep_for(std::chrono::milliseconds{100});
+    REQUIRE(4 == istr.recv(8));
+    INFO("if this fails, recv sets size incorrectly");
+    REQUIRE(istr.size() == 8);
+    int i_1, i_2;
+    istr >> i_1;
+    istr >> i_2;
+    REQUIRE(i_1 == 42);
+    REQUIRE(i_2 == 1337);
+    t.join();
+}
+TEST_CASE("test receiving twice, but reading one by one") {
+    std::thread t {[] {
+	std::this_thread::sleep_for(std::chrono::milliseconds{50});
+	inet::client client{"127.0.0.1", 3507};
+	auto istr = client.connect();
+	int i_1 {42}, i_2 {1337};
+	istr << i_1;
+	istr.send();
+	std::this_thread::sleep_for(std::chrono::milliseconds{100});
+	istr.clear();
+	istr << i_2;
+	istr.send();
+    }};
+    inet::server server{3507};
+    auto istr = server.accept();
+    INFO("should receive 4 bytes even though 8 requested, because only 4 are sent");
+    REQUIRE(4 == istr.recv(8));
+    REQUIRE(istr.size() == 4);
+    int i_1;
+    istr >> i_1;
+    REQUIRE(i_1 == 42);
+    REQUIRE(istr.size() == 0);
+    std::this_thread::sleep_for(std::chrono::milliseconds{100});
+    REQUIRE(4 == istr.recv(8));
+    INFO("if this fails, recv sets size incorrectly");
+    REQUIRE(istr.size() == 4);
+    int i_2;
+    istr >> i_2;
+    REQUIRE(i_2 == 1337);
+    REQUIRE(istr.size() == 0);
     t.join();
 }
