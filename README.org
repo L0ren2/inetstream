@@ -1,11 +1,19 @@
 * Inetstream
-C++ Stream interface for networking
+C++ Stream interface for easy networking
 ** What this is
 A simple header only networking API to send and receive simple messages from
 Linux to Linux
-** What this is not / What you can make out of this
-An elaborate cross plattform streaming toolkit to send very abstracted but
-typesafe messages from one network client to the next, even cross plattform and
-it's all header only
+** What this is not (yet)
+An elaborate cross plattform messaging toolkit to send abstracted but typesafe
+internet messages supporting TCP as well as UDP from one network peer to the
+next, and it's all header only
 ** Examples
-For examples please refer to [[examples/tcp_server.cpp][tcp_server.cpp]] and [[examples/tcp_client.cpp][tcp_client.cpp]].
+For examples please refer to the [[./test/test_tcp.cpp][TCP tests]] and [[./test/test_udp.cpp][UDP tests]] respectively. 
+** TODO Things left to be done
+[ ] non-blocking calls utilizing std::optional<inetstream<TCP>> for
+server<TCP>::accept and client<TCP>::connect
+- this will probably require the use of poll or select
+- may be sufficient to set socket to O_NONBLOCK but may also not be
+[ ] proper UDP support and tests
+[ ] revisit TODO comments about sufficientness and freeaddrinfo
+[ ] support for other platforms

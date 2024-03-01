@@ -60,9 +60,11 @@ namespace inet {
     public:
 	inetstream() = delete;
 	inetstream(const inetstream<P>&) = delete;
-	inetstream(inetstream<P>&& other) : _socket_fd {other._socket_fd}, _buf {std::move(other._buf)} {
+	inetstream(inetstream<P>&& other) : _socket_fd {other._socket_fd},
+					    _send_buf {std::move(other._send_buf)},
+					    _recv_buf {std::move(other._recv_buf)} {
 	    other._socket_fd = -1;
-	    _read_pos = _buf.begin();
+	    _read_pos = _recv_buf.begin();
 	}
 	~inetstream() { if (_socket_fd != -1) { close(_socket_fd); } }
 	/**					       
@@ -72,10 +74,10 @@ namespace inet {
 	void send() {
 	    std::chrono::milliseconds timeout {MAX_INET_TIMEOUT_MS};
 	    auto t_end = std::chrono::system_clock::now() + timeout;
-	    auto total = _buf.size();
+	    auto total = _send_buf.size();
 	    int sent_this_iter = 0;
 	    do {
-		sent_this_iter = ::send(_socket_fd, &_buf[_buf.size() - total], total, 0);
+		sent_this_iter = ::send(_socket_fd, &_send_buf[_send_buf.size() - total], total, 0);
 		if (sent_this_iter == -1) {
 		    throw std::system_error {errno, std::system_category(), strerror(errno)};
 		}
@@ -90,10 +92,6 @@ namespace inet {
 	 * push data onto the stream
 	 *
 	 */
-	/** 
-	 * put data on the stream
-	 *
-	 */
 	template <typename T>
 	typename std::enable_if<!std::is_same<T, uint16_t>::value
 				&& !std::is_same<T, uint32_t>::value
@@ -106,7 +104,7 @@ namespace inet {
 	    unsigned char chars[sizeof(T)];
 	    std::memcpy(&chars[0], &t, sizeof(T));
 	    for (std::size_t s {0}; s < sizeof t; ++s) {
-		this->_buf.push_back(chars[s]);
+		this->_send_buf.push_back(chars[s]);
 	    }
 	    return *this;
 	}
@@ -144,7 +142,7 @@ namespace inet {
 	    } u {0};
 	    u.i = htons(us);
 	    for (std::size_t s {0}; s < sz; ++s) {
-		this->_buf.push_back(u.b[s]);
+		this->_send_buf.push_back(u.b[s]);
 	    }
 	    return *this;
 	}
@@ -156,7 +154,7 @@ namespace inet {
 	    } u {0};
 	    u.i = htonl(ul);
 	    for (std::size_t s {0}; s < sz; ++s) {
-		this->_buf.push_back(u.b[s]);
+		this->_send_buf.push_back(u.b[s]);
 	    }
 	    return *this;
 	}
@@ -169,7 +167,7 @@ namespace inet {
 	    u.i  = static_cast<uint64_t>(htonl((ull & 0xffffffff00000000) >> 32)) << 32;
 	    u.i |= htonl(ull & 0x00000000ffffffff);
 	    for (std::size_t s {0}; s < sz; ++s) {
-		this->_buf.push_back(u.b[s]);
+		this->_send_buf.push_back(u.b[s]);
 	    }
 	    return *this;
 	}
@@ -191,14 +189,14 @@ namespace inet {
 	}
 	inetstream<P>& operator<< (std::string s) {
 	    for (const char c : s) {
-		this->_buf.push_back(c);
+		this->_send_buf.push_back(c);
 	    }
 	    return *this;
 	}
 	inetstream<P>& operator<< (const char* p) {
 	    std::size_t sz = std::strlen(p);
 	    for (std::size_t i {0}; i < sz; ++i) {
-		this->_buf.push_back(p[i]);
+		this->_send_buf.push_back(p[i]);
 	    }
 	    return *this;
 	}
@@ -298,9 +296,9 @@ namespace inet {
 	recv(std::size_t sz) {
 	    std::chrono::milliseconds timeout {MAX_INET_TIMEOUT_MS};
 	    auto t_end = std::chrono::system_clock::now() + timeout;
-	    // cache read_pos pointer, since _buf may realloc
-	    auto read_offset_ = _read_pos - _buf.begin(); 
-	    auto tmp_size = _buf.size();
+	    // cache read_pos pointer, since _recv_buf may realloc
+	    auto read_offset_ = _read_pos - _recv_buf.begin(); 
+	    auto tmp_size = _recv_buf.size();
 	    constexpr const std::size_t SZ {1024};
 	    int read {0};
 	    std::array<unsigned char, SZ> buf;
@@ -324,27 +322,27 @@ namespace inet {
 		    }
 		    throw std::system_error {errno, std::system_category(), strerror(errno)};
 		}
-		_buf.insert(_buf.end(), buf.begin(), buf.begin() + read);
+		_recv_buf.insert(_recv_buf.end(), buf.begin(), buf.begin() + read);
 		if (read == 0) {
 		    break;
 		}
 	    } while (std::chrono::system_clock::now() < t_end);
-	    _read_pos = _buf.begin() + read_offset_;
-	    return _buf.size() - tmp_size;
+	    _read_pos = _recv_buf.begin() + read_offset_;
+	    return _recv_buf.size() - tmp_size;
 	}    
 	template <protocol T = P>
 	typename std::enable_if<is_udp_prot<T>::value, std::size_t>::type
 	recv() {/*TODO: implement*/ return 0;}
 	bool empty() const { return size() == 0; }
-	void clear() { _buf.clear(); _read_pos = _buf.begin(); }
-	std::size_t size() const { return _buf.end() - _read_pos; }
+	void clear() { _send_buf.clear(); _recv_buf.clear(); _read_pos = _recv_buf.begin(); }
+	std::size_t size() const { return _recv_buf.end() - _read_pos; }
     private:
-	inetstream(int socket_fd) : _socket_fd {socket_fd}, _read_pos {_buf.begin()} {}
+	inetstream(int socket_fd) : _socket_fd {socket_fd}, _read_pos {_recv_buf.begin()} {}
 	friend class server<P>;
 	friend class client<P>;
 	int _socket_fd;
-	// TODO: replace _buf with _send_buf and _recv_buf
-	std::vector<byte> _buf;
+	std::vector<byte> _send_buf;
+	std::vector<byte> _recv_buf;
 	std::vector<byte>::iterator _read_pos;
     };
 
@@ -580,7 +578,7 @@ namespace inet {
 		freeaddrinfo(servinfo);
 		throw std::system_error {errno, std::system_category(), strerror(errno)};
 	    }
-	    /// TODO need to keep servinfo around until closing socket, since sendto
+	    /// TODO: need to keep servinfo around until closing socket, since sendto
 	    /// relies on servinfo->ai_addr, servinfo->ai_addrlen, ...
 	    freeaddrinfo(servinfo);
 	}
