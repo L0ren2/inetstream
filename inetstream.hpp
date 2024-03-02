@@ -2,6 +2,7 @@
 #define INETSTREAM_HPP_
 // C++
 #include <sstream>
+#include <optional>
 #include <vector>
 #include <array>
 #include <type_traits>
@@ -44,9 +45,6 @@ namespace inet {
     enum class protocol {
 	TCP, UDP
     };
-    // define tcp and udp "type"
-    typedef std::integral_constant<protocol, protocol::TCP> tcp_t;
-    typedef std::integral_constant<protocol, protocol::UDP> udp_t;
     // "type" traits
     template <protocol P> struct is_tcp_prot { static constexpr const bool value = std::false_type::value; };
     template <> struct is_tcp_prot<protocol::TCP> { static constexpr const bool value = std::true_type::value; };
@@ -67,27 +65,6 @@ namespace inet {
 	    _read_pos = _recv_buf.begin();
 	}
 	~inetstream() { if (_socket_fd != -1) { close(_socket_fd); } }
-	/**					       
-	 * sends data pushed into the stream over the network to remote
-	 *
-	 */
-	void send() {
-	    std::chrono::milliseconds timeout {MAX_INET_TIMEOUT_MS};
-	    auto t_end = std::chrono::system_clock::now() + timeout;
-	    auto total = _send_buf.size();
-	    int sent_this_iter = 0;
-	    do {
-		sent_this_iter = ::send(_socket_fd, &_send_buf[_send_buf.size() - total], total, 0);
-		if (sent_this_iter == -1) {
-		    throw std::system_error {errno, std::system_category(), strerror(errno)};
-		}
-		if (std::chrono::system_clock::now() > t_end) {
-		    throw std::runtime_error {"timeout reached"};
-		}
-		total -= sent_this_iter;
-	    } while (total > 0);
-	    this->clear();
-	}
 	/**
 	 * push data onto the stream
 	 *
@@ -285,6 +262,27 @@ namespace inet {
 		}
 	    }
 	}
+	/**					       
+	 * sends data pushed into the stream over the network to remote
+	 *
+	 */
+	void send() {
+	    std::chrono::milliseconds timeout {MAX_INET_TIMEOUT_MS};
+	    auto t_end = std::chrono::system_clock::now() + timeout;
+	    auto total = _send_buf.size();
+	    int sent_this_iter = 0;
+	    do {
+		sent_this_iter = ::send(_socket_fd, &_send_buf[_send_buf.size() - total], total, 0);
+		if (sent_this_iter == -1) {
+		    throw std::system_error {errno, std::system_category(), strerror(errno)};
+		}
+		if (std::chrono::system_clock::now() > t_end) {
+		    throw std::runtime_error {"timeout reached"};
+		}
+		total -= sent_this_iter;
+	    } while (total > 0);
+	    this->clear();
+	}
 	/**
 	 * receives network data, populating the stream with data
 	 *
@@ -349,8 +347,6 @@ namespace inet {
     template <protocol P>
     class server {
     public:
-	//template<protocol T = P>
-	//server(unsigned short Port);
 	template <protocol T = P, typename std::enable_if<is_tcp_prot<T>::value, int>::type* = nullptr>
 	server(unsigned short Port) : _port {Port} {
 	    addrinfo* servinfo, hints;
@@ -469,6 +465,61 @@ namespace inet {
 	    // connected to s
 	    return inetstream<protocol::TCP> {new_fd};
 	}
+#if defined(__cpp_lib_optional) && (__cpp_lib_optional >= 201606L)
+	template <protocol T = P>
+	typename std::enable_if<is_tcp_prot<T>::value, std::optional<inetstream<protocol::TCP>> >::type
+	accept(std::chrono::milliseconds timeout) {
+	    auto now = []() { return std::chrono::system_clock::now(); };
+	    auto t_end = now() + timeout;
+	    // set own socket back to blocking mode
+	    auto reset_flags = [this]() {
+		int flags = fcntl(_socket_fd, F_GETFL);
+		if (flags == -1)
+		    throw std::system_error {errno, std::system_category(), strerror(errno)};
+		if (flags & O_NONBLOCK)
+		    flags ^= O_NONBLOCK;
+		if (fcntl(_socket_fd, F_SETFL, flags) != 0)
+		    throw std::system_error {errno, std::system_category(), strerror(errno)};
+	    };
+	    sockaddr_storage client_addr;
+	    socklen_t sin_sz = sizeof client_addr;
+	    int new_fd {-1};
+	    // set own socket to non-blocking mode
+	    if (fcntl(_socket_fd, F_SETFL, O_NONBLOCK) != 0) {
+		throw std::system_error {errno, std::system_category(), strerror(errno)};
+	    }
+	    while (true) {
+		// accept non-blocking
+		new_fd = ::accept(_socket_fd, (sockaddr*)&client_addr, &sin_sz);
+		// check newly created socket
+		if (new_fd == -1) {
+		    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+			if (now() < t_end) {
+			    continue;
+			}
+			reset_flags();
+			return {};
+		    }
+		    reset_flags();
+		    throw std::system_error {errno, std::system_category(), strerror(errno)};
+		}
+		break;
+	    }
+	    reset_flags();
+	    char s[INET6_ADDRSTRLEN];
+	    const char* rv = inet_ntop(client_addr.ss_family,
+				       get_in_addr((sockaddr*)&client_addr),
+				       s, sizeof s);
+	    if (rv == NULL) {
+		throw std::system_error {errno, std::system_category(), strerror(errno)};
+	    }
+	    if (fcntl(new_fd, F_SETFL, O_NONBLOCK) != 0) {
+		throw std::system_error {errno, std::system_category(), strerror(errno)};
+	    }
+	    // success
+	    return inetstream<protocol::TCP>{new_fd};
+	}
+#endif
 	// enables "get_inetstream" if protocol is UDP
 	template <protocol T = P>
 	typename std::enable_if<is_udp_prot<T>::value, inetstream<protocol::UDP>>::type get_inetstream() {

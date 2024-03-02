@@ -1,7 +1,7 @@
 .PHONY: all clean
 
 CC=g++
-CFLAGS=-Wall -Wextra -Wpedantic
+CFLAGS=-Wall -Wextra -Wpedantic -std=c++17 -pedantic-errors
 LFLAGS=-pthread
 
 all: bin/test

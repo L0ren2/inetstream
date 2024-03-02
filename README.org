@@ -10,10 +10,6 @@ next, and it's all header only
 ** Examples
 For examples please refer to the [[./test/test_tcp.cpp][TCP tests]] and [[./test/test_udp.cpp][UDP tests]] respectively. 
 ** TODO Things left to be done
-[ ] non-blocking calls utilizing std::optional<inetstream<TCP>> for
-server<TCP>::accept and client<TCP>::connect
-- this will probably require the use of poll or select
-- may be sufficient to set socket to O_NONBLOCK but may also not be
 [ ] proper UDP support and tests
 [ ] revisit TODO comments about sufficientness and freeaddrinfo
 [ ] support for other platforms
