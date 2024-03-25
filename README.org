@@ -1,5 +1,5 @@
 * Inetstream
-C++ Stream interface for easy networking
+C++11 Stream interface for easy networking
 ** What this is
 A simple header only networking API to send and receive simple messages from
 Linux to Linux

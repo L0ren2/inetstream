@@ -2,6 +2,7 @@
 #define INETSTREAM_HPP_
 // C++
 #include <sstream>
+#include <iostream>
 #include <optional>
 #include <vector>
 #include <array>
@@ -22,18 +23,37 @@
 
 
 // users may override these
-#ifndef MAX_INET_CONNECTIONS
-#define MAX_INET_CONNECTIONS 10
+#ifndef INET_MAX_CONNECTIONS
+#define INET_MAX_CONNECTIONS 10
 #endif
-#ifndef MAX_INET_TIMEOUT_MS
-#define MAX_INET_TIMEOUT_MS 1
+
+#ifndef INET_MAX_SEND_TIMEOUT_MS
+#define INET_MAX_SEND_TIMEOUT_MS 2
+#endif
+
+#ifndef INET_MAX_RECV_TIMEOUT_MS
+#define INET_MAX_RECV_TIMEOUT_MS 1
 #endif
 // set to 6 to use IPv6 instead of IPv4
-#ifndef INETSTREAM_IPV
-#define INETSTREAM_IPV 4
+#ifndef INET_IPV
+#define INET_IPV 4
+#endif
+
+#ifndef INET_USE_DEFAULT_SIGUSR1_HANDLER
+#define INET_USE_DEFAULT_SIGUSR1_HANDLER false
+#endif
+
+#ifndef INET_PRINT_SIGUSR1
+#define INET_PRINT_SIGUSR1 false
 #endif
 
 namespace inet {
+    void sigusr1_handler(int signal) {
+	if (INET_PRINT_SIGUSR1) {
+	    std::cout << "inet::sigusr1_handler() was called (signal=" << signal << ")" << std::endl;
+	}
+    }
+
     inline void* get_in_addr(sockaddr* sa) {
 	if (sa->sa_family == AF_INET) {
 	    return &(((sockaddr_in*)sa)->sin_addr);
@@ -267,7 +287,7 @@ namespace inet {
 	 *
 	 */
 	void send() {
-	    std::chrono::milliseconds timeout {MAX_INET_TIMEOUT_MS};
+	    std::chrono::milliseconds timeout {INET_MAX_SEND_TIMEOUT_MS};
 	    auto t_end = std::chrono::system_clock::now() + timeout;
 	    auto total = _send_buf.size();
 	    int sent_this_iter = 0;
@@ -292,7 +312,7 @@ namespace inet {
 	template <protocol T = P>
 	typename std::enable_if<is_tcp_prot<T>::value, std::size_t>::type
 	recv(std::size_t sz) {
-	    std::chrono::milliseconds timeout {MAX_INET_TIMEOUT_MS};
+	    std::chrono::milliseconds timeout {INET_MAX_RECV_TIMEOUT_MS};
 	    auto t_end = std::chrono::system_clock::now() + timeout;
 	    // cache read_pos pointer, since _recv_buf may realloc
 	    auto read_offset_ = _read_pos - _recv_buf.begin(); 
@@ -349,12 +369,21 @@ namespace inet {
     public:
 	template <protocol T = P, typename std::enable_if<is_tcp_prot<T>::value, int>::type* = nullptr>
 	server(unsigned short Port) : _port {Port} {
+	    if (INET_USE_DEFAULT_SIGUSR1_HANDLER) {
+		struct sigaction sa;
+		sa.sa_handler = sigusr1_handler;
+		sigemptyset(&sa.sa_mask);
+		sa.sa_flags = 0;
+		if (sigaction(SIGUSR1, &sa, NULL) != 0) {
+		    throw std::system_error {errno, std::system_category(), strerror(errno)};
+		}
+	    }
 	    addrinfo* servinfo, hints;
 	    std::memset(&hints, 0, sizeof hints);
-	    if (INETSTREAM_IPV == 4) {
+	    if (INET_IPV == 4) {
 		hints.ai_family = AF_INET;
 	    }
-	    else if (INETSTREAM_IPV == 6) {
+	    else if (INET_IPV == 6) {
 		hints.ai_family = AF_INET6;
 	    }
 	    else {
@@ -395,7 +424,7 @@ namespace inet {
 	    if (p == NULL) {
 		throw std::system_error {errno, std::system_category(), strerror(errno)};
 	    }
-	    if (listen(_socket_fd, MAX_INET_CONNECTIONS) == -1) {
+	    if (listen(_socket_fd, INET_MAX_CONNECTIONS) == -1) {
 		throw std::system_error {errno, std::system_category(), strerror(errno)};
 	    }
 	}
@@ -403,10 +432,10 @@ namespace inet {
 	server(unsigned short Port) : _port {Port}, _close_sockfd {true} {
 	    addrinfo* servinfo, hints;
 	    std::memset(&hints, 0, sizeof hints);
-	    if (INETSTREAM_IPV == 4) {
+	    if (INET_IPV == 4) {
 		hints.ai_family = AF_INET;
 	    }
-	    else if (INETSTREAM_IPV == 6) {
+	    else if (INET_IPV == 6) {
 		hints.ai_family = AF_INET6;
 	    }
 	    else {
@@ -465,61 +494,6 @@ namespace inet {
 	    // connected to s
 	    return inetstream<protocol::TCP> {new_fd};
 	}
-#if defined(__cpp_lib_optional) && (__cpp_lib_optional >= 201606L)
-	template <protocol T = P>
-	typename std::enable_if<is_tcp_prot<T>::value, std::optional<inetstream<protocol::TCP>> >::type
-	accept(std::chrono::milliseconds timeout) {
-	    auto now = []() { return std::chrono::system_clock::now(); };
-	    auto t_end = now() + timeout;
-	    // set own socket back to blocking mode
-	    auto reset_flags = [this]() {
-		int flags = fcntl(_socket_fd, F_GETFL);
-		if (flags == -1)
-		    throw std::system_error {errno, std::system_category(), strerror(errno)};
-		if (flags & O_NONBLOCK)
-		    flags ^= O_NONBLOCK;
-		if (fcntl(_socket_fd, F_SETFL, flags) != 0)
-		    throw std::system_error {errno, std::system_category(), strerror(errno)};
-	    };
-	    sockaddr_storage client_addr;
-	    socklen_t sin_sz = sizeof client_addr;
-	    int new_fd {-1};
-	    // set own socket to non-blocking mode
-	    if (fcntl(_socket_fd, F_SETFL, O_NONBLOCK) != 0) {
-		throw std::system_error {errno, std::system_category(), strerror(errno)};
-	    }
-	    while (true) {
-		// accept non-blocking
-		new_fd = ::accept(_socket_fd, (sockaddr*)&client_addr, &sin_sz);
-		// check newly created socket
-		if (new_fd == -1) {
-		    if (errno == EAGAIN || errno == EWOULDBLOCK) {
-			if (now() < t_end) {
-			    continue;
-			}
-			reset_flags();
-			return {};
-		    }
-		    reset_flags();
-		    throw std::system_error {errno, std::system_category(), strerror(errno)};
-		}
-		break;
-	    }
-	    reset_flags();
-	    char s[INET6_ADDRSTRLEN];
-	    const char* rv = inet_ntop(client_addr.ss_family,
-				       get_in_addr((sockaddr*)&client_addr),
-				       s, sizeof s);
-	    if (rv == NULL) {
-		throw std::system_error {errno, std::system_category(), strerror(errno)};
-	    }
-	    if (fcntl(new_fd, F_SETFL, O_NONBLOCK) != 0) {
-		throw std::system_error {errno, std::system_category(), strerror(errno)};
-	    }
-	    // success
-	    return inetstream<protocol::TCP>{new_fd};
-	}
-#endif
 	// enables "get_inetstream" if protocol is UDP
 	template <protocol T = P>
 	typename std::enable_if<is_udp_prot<T>::value, inetstream<protocol::UDP>>::type get_inetstream() {
@@ -541,10 +515,10 @@ namespace inet {
 	    : _host {Host}, _port {Port}, _close_sockfd {true} {
 	    addrinfo* servinfo, hints;
 	    std::memset(&hints, 0, sizeof hints);
-	    if (INETSTREAM_IPV == 4) {
+	    if (INET_IPV == 4) {
 		hints.ai_family = AF_INET;
 	    }
-	    else if (INETSTREAM_IPV == 6) {
+	    else if (INET_IPV == 6) {
 		hints.ai_family = AF_INET6;
 	    }
 	    else {
@@ -597,10 +571,10 @@ namespace inet {
 	    : _host {Host}, _port {Port}, _close_sockfd {true} {
 	    addrinfo* servinfo, hints;
 	    std::memset(&hints, 0, sizeof hints);
-	    if (INETSTREAM_IPV == 4) {
+	    if (INET_IPV == 4) {
 		hints.ai_family = AF_INET;
 	    }
-	    else if (INETSTREAM_IPV == 6) {
+	    else if (INET_IPV == 6) {
 		hints.ai_family = AF_INET6;
 	    }
 	    else {

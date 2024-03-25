@@ -1,5 +1,6 @@
 #include "Catch2/include/catch.hpp"
 
+#define INET_USE_DEFAULT_SIGUSR1_HANDLER true
 #include "../inetstream.hpp"
 
 #include <thread>
@@ -300,7 +301,6 @@ TEST_CASE("send and receive multiple messages") {
 	istr.clear();
 	std::this_thread::sleep_for(std::chrono::milliseconds{20});
     }};
-
     inet::server<inet::protocol::TCP> server{3505};
     auto istr = server.accept();
 	int j {};
@@ -401,45 +401,39 @@ TEST_CASE("test receiving twice, but reading one by one") {
     REQUIRE(istr.size() == 0);
     t.join();
 }
-#if defined(__cpp_lib_optional) && (__cpp_lib_optional >= 201606L)
-TEST_CASE("Testing server::accept with timeout (success)") {
+TEST_CASE("test chaining leftshift on istr") {
     std::thread t {[] {
 	std::this_thread::sleep_for(std::chrono::milliseconds{50});
-	inet::client<inet::protocol::TCP> client{"127.0.0.1", 3508};
+	inet::client<inet::protocol::TCP> client {"127.0.0.1", 3508};
 	auto istr = client.connect();
-	int i_1 {42}, i_2 {1337};
-	istr << i_1;
-	istr.send();
-	std::this_thread::sleep_for(std::chrono::milliseconds{10});
-	istr.clear();
-	istr << i_2;
+	istr << 1 << 2 << 3 << 4;
 	istr.send();
     }};
-    inet::server<inet::protocol::TCP> server{3508};
-    auto o_istr = server.accept(std::chrono::milliseconds{70});
-    INFO("client did not connect in time");
-    REQUIRE(o_istr.has_value());
-    auto istr = std::move(o_istr.value());
-    INFO("should receive 4 bytes even though 8 requested, because only 4 are sent");
-    REQUIRE(4 == istr.recv(8));
-    REQUIRE(istr.size() == 4);
-    int i_1;
-    istr >> i_1;
-    REQUIRE(i_1 == 42);
-    REQUIRE(istr.size() == 0);
-    std::this_thread::sleep_for(std::chrono::milliseconds{10});
-    REQUIRE(4 == istr.recv(8));
-    INFO("if this fails, recv sets size incorrectly");
-    REQUIRE(istr.size() == 4);
-    int i_2;
-    istr >> i_2;
-    REQUIRE(i_2 == 1337);
-    REQUIRE(istr.size() == 0);
+    inet::server<inet::protocol::TCP> server {3508};
+    auto istr = server.accept();
+    std::this_thread::sleep_for(std::chrono::milliseconds{5});
+    istr.recv(4 * sizeof(int));
+    REQUIRE(istr.size() == 4 * sizeof(int));
+    for (int i {1}; i < 5; ++i) {
+	int j {};
+	istr >> j;
+	REQUIRE(i == j);
+    }
     t.join();
 }
-TEST_CASE("Testing server::accept with timeout (failure)") {
+TEST_CASE("test default signal handler for leaving accept() call") {
+    std::thread t {[] {
+	std::this_thread::sleep_for(std::chrono::milliseconds{10});
+	kill(getpid(), SIGUSR1);
+    }};
     inet::server<inet::protocol::TCP> server {3509};
-    auto o_istr = server.accept(std::chrono::milliseconds{70});
-    REQUIRE_FALSE(o_istr.has_value());
+    try {
+	server.accept();
+	REQUIRE(false == true);
+    }
+    catch (const std::system_error& e) {
+	// expect interrupted system call exception
+	REQUIRE(e.code().value() == EINTR);
+    }
+    t.join();
 }
-#endif
