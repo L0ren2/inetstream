@@ -7,7 +7,7 @@ LFLAGS=-pthread
 all: bin/test
 	@#
 
-bin/test: obj/test_main.o obj/test_tcp.o
+bin/test: obj/test_main.o obj/test_tcp.o obj/test_udp.o
 	@mkdir -p bin
 	$(CC) $(CFLAGS) -o $@ $^ $(LFLAGS)
 

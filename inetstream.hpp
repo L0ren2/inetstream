@@ -48,7 +48,7 @@
 #endif
 
 namespace inet {
-    void sigusr1_handler(int signal) {
+    inline void sigusr1_handler(int signal) {
 	if (INET_PRINT_SIGUSR1) {
 	    std::cout << "inet::sigusr1_handler() was called (signal=" << signal << ")" << std::endl;
 	}
@@ -78,13 +78,18 @@ namespace inet {
     public:
 	inetstream() = delete;
 	inetstream(const inetstream<P>&) = delete;
-	inetstream(inetstream<P>&& other) : _socket_fd {other._socket_fd},
-					    _send_buf {std::move(other._send_buf)},
-					    _recv_buf {std::move(other._recv_buf)} {
+	inetstream(inetstream<P>&& other) : _socket_fd {other._socket_fd}, _servinfo {other._servinfo} {
 	    other._socket_fd = -1;
-	    _read_pos = _recv_buf.begin();
+	    other._servinfo = nullptr;
+	    auto pos = other.size() - 1;
+	    _send_buf = std::move(other._send_buf);
+	    _recv_buf = std::move(other._recv_buf);
+	    _read_pos = _recv_buf.begin() + pos;
 	}
-	~inetstream() { if (_socket_fd != -1) { close(_socket_fd); } }
+	~inetstream() {
+	    if (_socket_fd != -1) { close(_socket_fd); }
+	    if (_servinfo) { freeaddrinfo(_servinfo); _servinfo = nullptr; }
+	}
 	/**
 	 * push data onto the stream
 	 *
@@ -286,7 +291,9 @@ namespace inet {
 	 * sends data pushed into the stream over the network to remote
 	 *
 	 */
-	void send() {
+	template <protocol T = P>
+	typename std::enable_if<is_tcp_prot<T>::value, void>::type
+	send() {
 	    std::chrono::milliseconds timeout {INET_MAX_SEND_TIMEOUT_MS};
 	    auto t_end = std::chrono::system_clock::now() + timeout;
 	    auto total = _send_buf.size();
@@ -302,6 +309,11 @@ namespace inet {
 		total -= sent_this_iter;
 	    } while (total > 0);
 	    this->clear();
+	}
+	template <protocol T = P>
+	typename std::enable_if<is_udp_prot<T>::value, void>::type
+	send() {
+	    // TODO: implement
 	}
 	/**
 	 * receives network data, populating the stream with data
@@ -350,15 +362,46 @@ namespace inet {
 	}    
 	template <protocol T = P>
 	typename std::enable_if<is_udp_prot<T>::value, std::size_t>::type
-	recv() {/*TODO: implement*/ return 0;}
+	recv() {
+	    std::chrono::milliseconds timeout {INET_MAX_RECV_TIMEOUT_MS};
+	    auto t_end = std::chrono::system_clock::now() + timeout;
+	    auto read_offset_ = _read_pos - _recv_buf.begin(); 
+	    struct sockaddr_storage remote_addr;
+	    socklen_t addr_len = sizeof(remote_addr);
+	    constexpr const std::size_t SZ {1024};
+	    std::array<unsigned char, SZ> buf;
+	    std::size_t total {0};
+	    do {
+		std::size_t num_recv =
+		    ::recvfrom(_socket_fd, &buf[0], SZ - 1, 0,
+			       reinterpret_cast<struct sockaddr*>(&remote_addr), addr_len);
+		if (num_recv > 0)
+		    total += num_recv;
+		if (num_recv == -1) {
+		    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+			if (std::chrono::system_clock::now() < t_end)
+			    continue;
+			break;
+		    }
+		    throw std::system_error {errno, std::system_category(), strerror(errno)};
+		}
+		_recv_buf.insert(_recv_buf.end(), buf.begin(), buf.begin() + num_recv);
+		if (num_recv == 0)
+		    break;
+	    } while (std::chrono::system_clock::now() < t_end);
+	    _read_pos = _recv_buf.begin() + read_offset_;
+	    return total;
+	}
 	bool empty() const { return size() == 0; }
 	void clear() { _send_buf.clear(); _recv_buf.clear(); _read_pos = _recv_buf.begin(); }
 	std::size_t size() const { return _recv_buf.end() - _read_pos; }
     private:
-	inetstream(int socket_fd) : _socket_fd {socket_fd}, _read_pos {_recv_buf.begin()} {}
+	inetstream(int socket_fd, addrinfo* servinfo) :
+	    _socket_fd {socket_fd}, _servinfo {servinfo}, _read_pos {_recv_buf.begin()} {}
 	friend class server<P>;
 	friend class client<P>;
 	int _socket_fd;
+	addrinfo* _servinfo;
 	std::vector<byte> _send_buf;
 	std::vector<byte> _recv_buf;
 	std::vector<byte>::iterator _read_pos;
@@ -378,7 +421,7 @@ namespace inet {
 		    throw std::system_error {errno, std::system_category(), strerror(errno)};
 		}
 	    }
-	    addrinfo* servinfo, hints;
+	    addrinfo hints;
 	    std::memset(&hints, 0, sizeof hints);
 	    if (INET_IPV == 4) {
 		hints.ai_family = AF_INET;
@@ -396,12 +439,12 @@ namespace inet {
 	    ss << _port;
 	    ss >> port;
 	    port[5] = 0;
-	    int rv = getaddrinfo(NULL, port, &hints, &servinfo);
+	    int rv = getaddrinfo(NULL, port, &hints, &_servinfo);
 	    if (rv != 0) {
 		throw std::system_error {rv, std::system_category(), gai_strerror(rv)};
 	    }
 	    addrinfo* p;
-	    for (p = servinfo; p != NULL; p = p->ai_next) {
+	    for (p = _servinfo; p != NULL; p = p->ai_next) {
 		_socket_fd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
 		if (_socket_fd == -1) {
 		    // swallow error
@@ -410,7 +453,6 @@ namespace inet {
 		int yes = 1; rv = 0;
 		rv = setsockopt(_socket_fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int));
 		if (rv == -1) {
-		    freeaddrinfo(servinfo);
 		    throw std::system_error {errno, std::system_category(), strerror(errno)};
 		}
 		if (bind(_socket_fd, p->ai_addr, p->ai_addrlen) == -1) {
@@ -420,7 +462,6 @@ namespace inet {
 		}
 		break;
 	    }
-	    freeaddrinfo(servinfo);
 	    if (p == NULL) {
 		throw std::system_error {errno, std::system_category(), strerror(errno)};
 	    }
@@ -430,7 +471,7 @@ namespace inet {
 	}
 	template <protocol T = P, typename std::enable_if<is_udp_prot<T>::value, int>::type* = nullptr>
 	server(unsigned short Port) : _port {Port}, _close_sockfd {true} {
-	    addrinfo* servinfo, hints;
+	    addrinfo hints;
 	    std::memset(&hints, 0, sizeof hints);
 	    if (INET_IPV == 4) {
 		hints.ai_family = AF_INET;
@@ -448,12 +489,12 @@ namespace inet {
 	    ss << _port;
 	    ss >> port;
 	    port[5] = 0;
-	    int rv = getaddrinfo(NULL, port, &hints, &servinfo);
+	    int rv = getaddrinfo(NULL, port, &hints, &_servinfo);
 	    if (rv != 0) {
 		throw std::system_error {rv, std::system_category(), gai_strerror(rv)};
 	    }
 	    addrinfo* p;
-	    for (p = servinfo; p != NULL; p = p->ai_next) {
+	    for (p = _servinfo; p != NULL; p = p->ai_next) {
 		_socket_fd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
 		if (_socket_fd == -1) {
 		    // swallow error
@@ -466,12 +507,20 @@ namespace inet {
 		}
 		break;
 	    }
-	    freeaddrinfo(servinfo);
 	    if (p == NULL) {
 		throw std::system_error {errno, std::system_category(), strerror(errno)};
 	    }
 	}
-	~server() { if (_close_sockfd) { close(_socket_fd); } }
+	~server() {
+	    if (_close_sockfd) {
+		close(_socket_fd);
+		_socket_fd = -1;
+	    }
+	    if (_free_servinfo) {
+		freeaddrinfo(_servinfo);
+		_servinfo = nullptr;
+	    }
+	}
 	// enables "accept" if protocol is TCP
 	template <protocol T = P>
 	typename std::enable_if<is_tcp_prot<T>::value, inetstream<protocol::TCP>>::type accept() {
@@ -492,19 +541,22 @@ namespace inet {
 		throw std::system_error {errno, std::system_category(), strerror(errno)};
 	    }
 	    // connected to s
-	    return inetstream<protocol::TCP> {new_fd};
+	    _free_servinfo = false;
+	    return inetstream<protocol::TCP> {new_fd, _servinfo};
 	}
 	// enables "get_inetstream" if protocol is UDP
 	template <protocol T = P>
 	typename std::enable_if<is_udp_prot<T>::value, inetstream<protocol::UDP>>::type get_inetstream() {
 	    // let inetstream handle closing socket -> transfer ownership
 	    _close_sockfd = false;
-	    return inetstream<protocol::UDP> {_socket_fd};
+	    _free_servinfo = false;
+	    return inetstream<protocol::UDP> {_socket_fd, _servinfo};
 	}
     private:
 	unsigned short _port;
 	int _socket_fd;
-	bool _close_sockfd;
+	addrinfo* _servinfo;
+	bool _close_sockfd, _free_servinfo;
     };
     
     template <protocol P>
@@ -512,8 +564,8 @@ namespace inet {
     public:
 	template <protocol T = P, typename std::enable_if<is_tcp_prot<T>::value, int>::type* = nullptr>
 	client(const std::string& Host, unsigned short Port)
-	    : _host {Host}, _port {Port}, _close_sockfd {true} {
-	    addrinfo* servinfo, hints;
+	    : _host {Host}, _port {Port}, _servinfo {nullptr}, _close_sockfd {true} {
+	    addrinfo hints;
 	    std::memset(&hints, 0, sizeof hints);
 	    if (INET_IPV == 4) {
 		hints.ai_family = AF_INET;
@@ -530,12 +582,12 @@ namespace inet {
 	    ss << _port;
 	    ss >> port;
 	    port[5] = 0;
-	    int rv = getaddrinfo(_host.c_str(), port, &hints, &servinfo);
+	    int rv = getaddrinfo(_host.c_str(), port, &hints, &_servinfo);
 	    if (rv != 0) {
 		throw std::system_error {rv, std::system_category(), gai_strerror(rv)};
 	    }
 	    addrinfo* p;
-	    for (p = servinfo; p != NULL; p = p->ai_next) {
+	    for (p = _servinfo; p != NULL; p = p->ai_next) {
 		_socket_fd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
 		if (_socket_fd == -1) {
 		    // swallow error
@@ -549,7 +601,6 @@ namespace inet {
 		break;
 	    }
 	    if (p == NULL) {
-		freeaddrinfo(servinfo);
 		throw std::system_error {errno, std::system_category(), strerror(errno)};
 	    }
 	    char s[INET6_ADDRSTRLEN];
@@ -557,19 +608,16 @@ namespace inet {
 					get_in_addr((sockaddr*)p->ai_addr),
 					s, sizeof s);
 	    if (rvp == NULL) {
-		freeaddrinfo(servinfo);
 		throw std::system_error {errno, std::system_category(), strerror(errno)};
 	    }
 	    if (fcntl(_socket_fd, F_SETFL, O_NONBLOCK) != 0) {
-		freeaddrinfo(servinfo);
 		throw std::system_error {errno, std::system_category(), strerror(errno)};
 	    }
-	    freeaddrinfo(servinfo);
 	}
 	template <protocol T = P, typename std::enable_if<is_udp_prot<T>::value, int>::type* = nullptr>
 	client (const std::string& Host, unsigned short Port)
-	    : _host {Host}, _port {Port}, _close_sockfd {true} {
-	    addrinfo* servinfo, hints;
+	    : _host {Host}, _port {Port}, _servinfo {nullptr}, _close_sockfd {true} {
+	    addrinfo hints;
 	    std::memset(&hints, 0, sizeof hints);
 	    if (INET_IPV == 4) {
 		hints.ai_family = AF_INET;
@@ -586,12 +634,12 @@ namespace inet {
 	    ss << _port;
 	    ss >> port;
 	    port[5] = 0;
-	    int rv = getaddrinfo(_host.c_str(), port, &hints, &servinfo);
+	    int rv = getaddrinfo(_host.c_str(), port, &hints, &_servinfo);
 	    if (rv != 0) {
 		throw std::system_error {rv, std::system_category(), gai_strerror(rv)};
 	    }
 	    addrinfo* p;
-	    for (p = servinfo; p != NULL; p = p->ai_next) {
+	    for (p = _servinfo; p != NULL; p = p->ai_next) {
 		_socket_fd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
 		if (_socket_fd == -1) {
 		    // swallow error
@@ -600,20 +648,22 @@ namespace inet {
 		break;
 	    }
 	    if (p == NULL) {
-		freeaddrinfo(servinfo);
 		throw std::system_error {errno, std::system_category(), strerror(errno)};
 	    }
-	    /// TODO: need to keep servinfo around until closing socket, since sendto
-	    /// relies on servinfo->ai_addr, servinfo->ai_addrlen, ...
-	    freeaddrinfo(servinfo);
 	}
-	~client() { if(_close_sockfd) { close(_socket_fd); } }
+	~client() {
+	    if(_close_sockfd) {
+		close(_socket_fd);
+		freeaddrinfo(_servinfo);
+		_servinfo = nullptr;
+	    }
+	}
 	// enables "connect" if protocol is TCP
 	template <protocol T = P>
 	typename std::enable_if<is_tcp_prot<T>::value, inetstream<protocol::TCP>>::type
 	connect() {
 	    _close_sockfd = false;
-	    return inetstream<protocol::TCP> {_socket_fd};
+	    return inetstream<protocol::TCP> {_socket_fd, _servinfo};
 	}
 	// enables "get_inetstream" if protocol is UDP
 	template <protocol T = P>
@@ -621,11 +671,12 @@ namespace inet {
 	get_inetstream() {
 	    // TODO: investigate if this is sufficient
 	    _close_sockfd = false;
-	    return inetstream<protocol::UDP> {_socket_fd};
+	    return inetstream<protocol::UDP> {_socket_fd, _servinfo};
 	}
     private:
 	std::string _host;
 	unsigned short _port;
+	addrinfo* _servinfo;
 	int _socket_fd;
 	bool _created_inetstream;
 	bool _close_sockfd;
