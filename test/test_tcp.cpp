@@ -437,3 +437,57 @@ TEST_CASE("test default signal handler for leaving accept() call") {
     }
     t.join();
 }
+TEST_CASE("multiple clients") {
+    std::thread t1 {[] {
+	std::this_thread::sleep_for(std::chrono::milliseconds{50});
+	{
+	    inet::client<inet::protocol::TCP> client1 {"127.0.0.1", 3510};
+	    auto istr1 = client1.connect();
+	    istr1 << 1; istr1.send();
+	    std::this_thread::sleep_for(std::chrono::milliseconds{50});
+	    istr1.clear(); istr1.recv(4);
+	    REQUIRE(istr1.size() == 4);
+	    int i {0};
+	    istr1 >> i;
+	    REQUIRE(i == 42);
+	    // kill client
+	}
+    }};
+    std::thread t2 {[] {
+	std::this_thread::sleep_for(std::chrono::milliseconds{100});
+	{
+	    inet::client<inet::protocol::TCP> client2 {"127.0.0.1", 3510};
+	    auto istr2 = client2.connect();
+	    istr2 << 2; istr2.send();
+	    std::this_thread::sleep_for(std::chrono::milliseconds{50});
+	    istr2.clear(); istr2.recv(4);
+	    REQUIRE(istr2.size() == 4);
+	    int i {0};
+	    istr2 >> i;
+	    REQUIRE(i == 1337);
+	    // kill client
+	}
+    }};
+    inet::server<inet::protocol::TCP> server {3510};
+    {
+	auto istr1 = server.accept();
+	istr1.recv(4);
+	REQUIRE(istr1.size() == 4);
+	int i {0};
+	istr1 >> i;
+	REQUIRE(i == 1);
+	istr1.clear(); istr1 << 42;
+	istr1.send();
+    }
+    {
+	auto istr2 = server.accept();
+	istr2.recv(4);
+	REQUIRE(istr2.size() == 4);
+	int i {0};
+	istr2 >> i;
+	REQUIRE(i == 2);
+	istr2.clear(); istr2 << 1337;
+	istr2.send();
+    }
+    t1.join(); t2.join();
+}

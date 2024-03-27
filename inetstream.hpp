@@ -411,7 +411,7 @@ namespace inet {
     class server {
     public:
 	template <protocol T = P, typename std::enable_if<is_tcp_prot<T>::value, int>::type* = nullptr>
-	server(unsigned short Port) : _port {Port} {
+	server(unsigned short Port) : _port {Port}, _close_sockfd {true} {
 	    if (INET_USE_DEFAULT_SIGUSR1_HANDLER) {
 		struct sigaction sa;
 		sa.sa_handler = sigusr1_handler;
@@ -512,14 +512,8 @@ namespace inet {
 	    }
 	}
 	~server() {
-	    if (_close_sockfd) {
-		close(_socket_fd);
-		_socket_fd = -1;
-	    }
-	    if (_free_servinfo) {
-		freeaddrinfo(_servinfo);
-		_servinfo = nullptr;
-	    }
+	    if (_close_sockfd) { close(_socket_fd); _socket_fd = -1; }
+	    if (_servinfo) { freeaddrinfo(_servinfo); _servinfo = nullptr; }
 	}
 	// enables "accept" if protocol is TCP
 	template <protocol T = P>
@@ -541,22 +535,21 @@ namespace inet {
 		throw std::system_error {errno, std::system_category(), strerror(errno)};
 	    }
 	    // connected to s
-	    _free_servinfo = false;
-	    return inetstream<protocol::TCP> {new_fd, _servinfo};
+	    // do not send servinfo over
+	    return inetstream<protocol::TCP> {new_fd, nullptr};
 	}
 	// enables "get_inetstream" if protocol is UDP
 	template <protocol T = P>
 	typename std::enable_if<is_udp_prot<T>::value, inetstream<protocol::UDP>>::type get_inetstream() {
 	    // let inetstream handle closing socket -> transfer ownership
 	    _close_sockfd = false;
-	    _free_servinfo = false;
-	    return inetstream<protocol::UDP> {_socket_fd, _servinfo};
+	    return inetstream<protocol::UDP> {_socket_fd, nullptr};
 	}
     private:
 	unsigned short _port;
 	int _socket_fd;
 	addrinfo* _servinfo;
-	bool _close_sockfd, _free_servinfo;
+	bool _close_sockfd;
     };
     
     template <protocol P>
@@ -654,7 +647,9 @@ namespace inet {
 	~client() {
 	    if(_close_sockfd) {
 		close(_socket_fd);
-		freeaddrinfo(_servinfo);
+		if (_servinfo) {
+		    freeaddrinfo(_servinfo);
+		}
 		_servinfo = nullptr;
 	    }
 	}
