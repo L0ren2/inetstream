@@ -56,9 +56,9 @@ namespace inet {
 
     inline void* get_in_addr(sockaddr* sa) {
 	if (sa->sa_family == AF_INET) {
-	    return &(((sockaddr_in*)sa)->sin_addr);
+	    return &((reinterpret_cast<sockaddr_in*>(sa))->sin_addr);
 	}
-	return &(((sockaddr_in6*)sa)->sin6_addr);
+	return &((reinterpret_cast<sockaddr_in6*>(sa))->sin6_addr);
     }
     typedef unsigned char byte;
     
@@ -297,8 +297,8 @@ namespace inet {
 	    std::chrono::milliseconds timeout {INET_MAX_SEND_TIMEOUT_MS};
 	    auto t_end = std::chrono::system_clock::now() + timeout;
 	    auto total = _send_buf.size();
-	    int sent_this_iter = 0;
 	    do {
+		int sent_this_iter = 0;
 		sent_this_iter = ::send(_socket_fd, &_send_buf[_send_buf.size() - total], total, 0);
 		if (sent_this_iter == -1) {
 		    throw std::system_error {errno, std::system_category(), strerror(errno)};
@@ -313,7 +313,32 @@ namespace inet {
 	template <protocol T = P>
 	typename std::enable_if<is_udp_prot<T>::value, void>::type
 	send() {
-	    // TODO: implement
+	    // std::cout << "UDP::send(): " << __LINE__ << std::endl;
+	    // struct sockaddr_storage remote_addr;
+	    // socklen_t remote_addrlen = sizeof(remote_addr);
+	    // std::cout << "UDP::send(): " << __LINE__ << " socket = " << _socket_fd << std::endl;
+	    // if (getpeername(_socket_fd, reinterpret_cast<sockaddr*>(&remote_addr), &remote_addrlen) != 0) {
+	    // 	throw std::system_error {errno, std::system_category(), strerror(errno)};
+	    // }
+	    // std::cout << "UDP::send(): " << __LINE__ << std::endl;
+	    std::chrono::milliseconds timeout {INET_MAX_SEND_TIMEOUT_MS};
+	    auto t_end = std::chrono::system_clock::now() + timeout;
+	    auto total = _send_buf.size();
+	    do {
+		int sent_this_iter =
+		    ::sendto(_socket_fd, &_send_buf[_send_buf.size() - total], total, 0,
+			     reinterpret_cast<sockaddr*>(&_servinfo->ai_addr), _servinfo->ai_addrlen);
+		std::cout << "UDP::send(): " << __LINE__ << " sent: " << sent_this_iter << std::endl;
+		if (sent_this_iter == -1) {
+		    throw std::system_error {errno, std::system_category(), strerror(errno)};
+		}
+		if (std::chrono::system_clock::now() > t_end) {
+		    throw std::runtime_error {"timeout reached"};
+		}
+		total -= sent_this_iter;
+	    std::cout << "UDP::send(): " << __LINE__ << std::endl;
+	    } while (total > 0);
+	    std::cout << "UDP::send(): " << __LINE__ << std::endl;
 	}
 	/**
 	 * receives network data, populating the stream with data
@@ -372,9 +397,9 @@ namespace inet {
 	    std::array<unsigned char, SZ> buf;
 	    std::size_t total {0};
 	    do {
-		std::size_t num_recv =
+		int num_recv =
 		    ::recvfrom(_socket_fd, &buf[0], SZ - 1, 0,
-			       reinterpret_cast<struct sockaddr*>(&remote_addr), addr_len);
+			       reinterpret_cast<struct sockaddr*>(&remote_addr), &addr_len);
 		if (num_recv > 0)
 		    total += num_recv;
 		if (num_recv == -1) {
@@ -411,7 +436,7 @@ namespace inet {
     class server {
     public:
 	template <protocol T = P, typename std::enable_if<is_tcp_prot<T>::value, int>::type* = nullptr>
-	server(unsigned short Port) : _port {Port}, _close_sockfd {true} {
+	server(unsigned short Port) : _port {Port}, _owns {true} {
 	    if (INET_USE_DEFAULT_SIGUSR1_HANDLER) {
 		struct sigaction sa;
 		sa.sa_handler = sigusr1_handler;
@@ -470,7 +495,7 @@ namespace inet {
 	    }
 	}
 	template <protocol T = P, typename std::enable_if<is_udp_prot<T>::value, int>::type* = nullptr>
-	server(unsigned short Port) : _port {Port}, _close_sockfd {true} {
+	server(unsigned short Port) : _port {Port}, _owns {true} {
 	    addrinfo hints;
 	    std::memset(&hints, 0, sizeof hints);
 	    if (INET_IPV == 4) {
@@ -493,26 +518,25 @@ namespace inet {
 	    if (rv != 0) {
 		throw std::system_error {rv, std::system_category(), gai_strerror(rv)};
 	    }
-	    addrinfo* p;
-	    for (p = _servinfo; p != NULL; p = p->ai_next) {
-		_socket_fd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
+	    for (_p = _servinfo; _p != NULL; _p = _p->ai_next) {
+		_socket_fd = socket(_p->ai_family, _p->ai_socktype, _p->ai_protocol);
 		if (_socket_fd == -1) {
 		    // swallow error
 		    continue;
 		}
-		if (bind(_socket_fd, p->ai_addr, p->ai_addrlen) == -1) {
+		if (bind(_socket_fd, _p->ai_addr, _p->ai_addrlen) == -1) {
 		    close(_socket_fd);
 		    // swallow error
 		    continue;
 		}
 		break;
 	    }
-	    if (p == NULL) {
+	    if (_p == NULL) {
 		throw std::system_error {errno, std::system_category(), strerror(errno)};
 	    }
 	}
 	~server() {
-	    if (_close_sockfd) { close(_socket_fd); _socket_fd = -1; }
+	    if (_owns) { close(_socket_fd); _socket_fd = -1; }
 	    if (_servinfo) { freeaddrinfo(_servinfo); _servinfo = nullptr; }
 	}
 	// enables "accept" if protocol is TCP
@@ -541,15 +565,15 @@ namespace inet {
 	// enables "get_inetstream" if protocol is UDP
 	template <protocol T = P>
 	typename std::enable_if<is_udp_prot<T>::value, inetstream<protocol::UDP>>::type get_inetstream() {
-	    // let inetstream handle closing socket -> transfer ownership
-	    _close_sockfd = false;
-	    return inetstream<protocol::UDP> {_socket_fd, nullptr};
+	    // transfer ownership
+	    _owns = false;
+	    return inetstream<protocol::UDP> {_socket_fd, _servinfo};
 	}
     private:
 	unsigned short _port;
 	int _socket_fd;
 	addrinfo* _servinfo;
-	bool _close_sockfd;
+	bool _owns;
     };
     
     template <protocol P>

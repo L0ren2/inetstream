@@ -11,7 +11,7 @@ bin/test: obj/test_main.o obj/test_tcp.o obj/test_udp.o
 	@mkdir -p bin
 	$(CC) $(CFLAGS) -o $@ $^ $(LFLAGS)
 
-obj/%.o: %.cpp
+obj/%.o: %.cpp ../inetstream.hpp
 	@mkdir -p obj
 	$(CC) $(CFLAGS) -c -o $@ $<
 
