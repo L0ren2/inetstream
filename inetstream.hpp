@@ -71,6 +71,9 @@ namespace inet {
     template <protocol P> struct is_udp_prot { static constexpr const bool value = std::false_type::value; };
     template <> struct is_udp_prot<protocol::UDP> { static constexpr const bool value = std::true_type::value; };
     // forward decl
+    struct addrinfos {
+	struct addrinfo* _infos, *_p;
+    };
     template <protocol P> class server;
     template <protocol P> class client;
     template <protocol P>
@@ -78,9 +81,11 @@ namespace inet {
     public:
 	inetstream() = delete;
 	inetstream(const inetstream<P>&) = delete;
-	inetstream(inetstream<P>&& other) : _socket_fd {other._socket_fd}, _servinfo {other._servinfo} {
+	inetstream(inetstream<P>&& other) : _socket_fd {other._socket_fd} {
 	    other._socket_fd = -1;
-	    other._servinfo = nullptr;
+	    _addrinfos._infos = other._addrinfos._infos;
+	    _addrinfos._p = other._addrinfos._p;
+	    other._addrinfos._infos = other._addrinfos._p = nullptr;
 	    auto pos = other.size() - 1;
 	    _send_buf = std::move(other._send_buf);
 	    _recv_buf = std::move(other._recv_buf);
@@ -88,7 +93,7 @@ namespace inet {
 	}
 	~inetstream() {
 	    if (_socket_fd != -1) { close(_socket_fd); }
-	    if (_servinfo) { freeaddrinfo(_servinfo); _servinfo = nullptr; }
+	    freeaddrinfo(_addrinfos._infos); _addrinfos._infos = _addrinfos._p = nullptr;
 	}
 	/**
 	 * push data onto the stream
@@ -313,21 +318,13 @@ namespace inet {
 	template <protocol T = P>
 	typename std::enable_if<is_udp_prot<T>::value, void>::type
 	send() {
-	    // std::cout << "UDP::send(): " << __LINE__ << std::endl;
-	    // struct sockaddr_storage remote_addr;
-	    // socklen_t remote_addrlen = sizeof(remote_addr);
-	    // std::cout << "UDP::send(): " << __LINE__ << " socket = " << _socket_fd << std::endl;
-	    // if (getpeername(_socket_fd, reinterpret_cast<sockaddr*>(&remote_addr), &remote_addrlen) != 0) {
-	    // 	throw std::system_error {errno, std::system_category(), strerror(errno)};
-	    // }
-	    // std::cout << "UDP::send(): " << __LINE__ << std::endl;
 	    std::chrono::milliseconds timeout {INET_MAX_SEND_TIMEOUT_MS};
 	    auto t_end = std::chrono::system_clock::now() + timeout;
 	    auto total = _send_buf.size();
 	    do {
 		int sent_this_iter =
 		    ::sendto(_socket_fd, &_send_buf[_send_buf.size() - total], total, 0,
-			     reinterpret_cast<sockaddr*>(&_servinfo->ai_addr), _servinfo->ai_addrlen);
+			     reinterpret_cast<sockaddr*>(&_addrinfos._infos->ai_addr), _addrinfos._infos->ai_addrlen);
 		std::cout << "UDP::send(): " << __LINE__ << " sent: " << sent_this_iter << std::endl;
 		if (sent_this_iter == -1) {
 		    throw std::system_error {errno, std::system_category(), strerror(errno)};
@@ -421,12 +418,12 @@ namespace inet {
 	void clear() { _send_buf.clear(); _recv_buf.clear(); _read_pos = _recv_buf.begin(); }
 	std::size_t size() const { return _recv_buf.end() - _read_pos; }
     private:
-	inetstream(int socket_fd, addrinfo* servinfo) :
-	    _socket_fd {socket_fd}, _servinfo {servinfo}, _read_pos {_recv_buf.begin()} {}
+	inetstream(int socket_fd, addrinfos addrinfos) :
+	    _socket_fd {socket_fd}, _addrinfos {addrinfos}, _read_pos {_recv_buf.begin()} {}
 	friend class server<P>;
 	friend class client<P>;
 	int _socket_fd;
-	addrinfo* _servinfo;
+	addrinfos _addrinfos;
 	std::vector<byte> _send_buf;
 	std::vector<byte> _recv_buf;
 	std::vector<byte>::iterator _read_pos;
@@ -436,7 +433,7 @@ namespace inet {
     class server {
     public:
 	template <protocol T = P, typename std::enable_if<is_tcp_prot<T>::value, int>::type* = nullptr>
-	server(unsigned short Port) : _port {Port}, _owns {true} {
+	server(unsigned short Port) : _port {Port}, _addrinfos {nullptr, nullptr}, _owns {true} {
 	    if (INET_USE_DEFAULT_SIGUSR1_HANDLER) {
 		struct sigaction sa;
 		sa.sa_handler = sigusr1_handler;
@@ -464,13 +461,12 @@ namespace inet {
 	    ss << _port;
 	    ss >> port;
 	    port[5] = 0;
-	    int rv = getaddrinfo(NULL, port, &hints, &_servinfo);
+	    int rv = getaddrinfo(NULL, port, &hints, &_addrinfos._infos);
 	    if (rv != 0) {
 		throw std::system_error {rv, std::system_category(), gai_strerror(rv)};
 	    }
-	    addrinfo* p;
-	    for (p = _servinfo; p != NULL; p = p->ai_next) {
-		_socket_fd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
+	    for (_addrinfos._p = _addrinfos._infos; _addrinfos._p != NULL; _addrinfos._p = _addrinfos._p->ai_next) {
+		_socket_fd = socket(_addrinfos._p->ai_family, _addrinfos._p->ai_socktype, _addrinfos._p->ai_protocol);
 		if (_socket_fd == -1) {
 		    // swallow error
 		    continue;
@@ -480,14 +476,14 @@ namespace inet {
 		if (rv == -1) {
 		    throw std::system_error {errno, std::system_category(), strerror(errno)};
 		}
-		if (bind(_socket_fd, p->ai_addr, p->ai_addrlen) == -1) {
+		if (bind(_socket_fd, _addrinfos._p->ai_addr, _addrinfos._p->ai_addrlen) == -1) {
 		    close(_socket_fd);
 		    // swallow error
 		    continue;
 		}
 		break;
 	    }
-	    if (p == NULL) {
+	    if (_addrinfos._p == NULL) {
 		throw std::system_error {errno, std::system_category(), strerror(errno)};
 	    }
 	    if (listen(_socket_fd, INET_MAX_CONNECTIONS) == -1) {
@@ -495,7 +491,7 @@ namespace inet {
 	    }
 	}
 	template <protocol T = P, typename std::enable_if<is_udp_prot<T>::value, int>::type* = nullptr>
-	server(unsigned short Port) : _port {Port}, _owns {true} {
+	server(unsigned short Port) : _port {Port}, _addrinfos {nullptr, nullptr}, _owns {true} {
 	    addrinfo hints;
 	    std::memset(&hints, 0, sizeof hints);
 	    if (INET_IPV == 4) {
@@ -514,43 +510,43 @@ namespace inet {
 	    ss << _port;
 	    ss >> port;
 	    port[5] = 0;
-	    int rv = getaddrinfo(NULL, port, &hints, &_servinfo);
+	    int rv = getaddrinfo(NULL, port, &hints, &_addrinfos._infos);
 	    if (rv != 0) {
 		throw std::system_error {rv, std::system_category(), gai_strerror(rv)};
 	    }
-	    for (_p = _servinfo; _p != NULL; _p = _p->ai_next) {
-		_socket_fd = socket(_p->ai_family, _p->ai_socktype, _p->ai_protocol);
+	    for (_addrinfos._p = _addrinfos._infos; _addrinfos._p != NULL; _addrinfos._p = _addrinfos._p->ai_next) {
+		_socket_fd = socket(_addrinfos._p->ai_family, _addrinfos._p->ai_socktype, _addrinfos._p->ai_protocol);
 		if (_socket_fd == -1) {
 		    // swallow error
 		    continue;
 		}
-		if (bind(_socket_fd, _p->ai_addr, _p->ai_addrlen) == -1) {
+		if (bind(_socket_fd, _addrinfos._p->ai_addr, _addrinfos._p->ai_addrlen) == -1) {
 		    close(_socket_fd);
 		    // swallow error
 		    continue;
 		}
 		break;
 	    }
-	    if (_p == NULL) {
+	    if (_addrinfos._p == NULL) {
 		throw std::system_error {errno, std::system_category(), strerror(errno)};
 	    }
 	}
 	~server() {
-	    if (_owns) { close(_socket_fd); _socket_fd = -1; }
-	    if (_servinfo) { freeaddrinfo(_servinfo); _servinfo = nullptr; }
+	    close(_socket_fd); _socket_fd = -1;
+	    if (_owns) { freeaddrinfo(_addrinfos._infos); _addrinfos._infos = nullptr; }
 	}
 	// enables "accept" if protocol is TCP
 	template <protocol T = P>
 	typename std::enable_if<is_tcp_prot<T>::value, inetstream<protocol::TCP>>::type accept() {
 	    sockaddr_storage client_addr;
 	    socklen_t sin_sz = sizeof client_addr;
-	    int new_fd = ::accept(_socket_fd, (sockaddr*)&client_addr, &sin_sz);
+	    int new_fd = ::accept(_socket_fd, reinterpret_cast<sockaddr*>(&client_addr), &sin_sz);
 	    if (new_fd == -1) {
 		throw std::system_error {errno, std::system_category(), strerror(errno)};
 	    }
 	    char s[INET6_ADDRSTRLEN];
 	    const char* rv = inet_ntop(client_addr.ss_family,
-				       get_in_addr((sockaddr*)&client_addr),
+				       get_in_addr(reinterpret_cast<sockaddr*>(&client_addr)),
 				       s, sizeof s);
 	    if (rv == NULL) {
 		throw std::system_error {errno, std::system_category(), strerror(errno)};
@@ -559,20 +555,21 @@ namespace inet {
 		throw std::system_error {errno, std::system_category(), strerror(errno)};
 	    }
 	    // connected to s
-	    // do not send servinfo over
-	    return inetstream<protocol::TCP> {new_fd, nullptr};
+	    _owns = false;
+	    return inetstream<protocol::TCP> {new_fd, {nullptr, nullptr}};
 	}
 	// enables "get_inetstream" if protocol is UDP
 	template <protocol T = P>
 	typename std::enable_if<is_udp_prot<T>::value, inetstream<protocol::UDP>>::type get_inetstream() {
 	    // transfer ownership
 	    _owns = false;
-	    return inetstream<protocol::UDP> {_socket_fd, _servinfo};
+	    // TODO: this can not work
+	    return inetstream<protocol::UDP> {-1, _addrinfos};
 	}
     private:
 	unsigned short _port;
 	int _socket_fd;
-	addrinfo* _servinfo;
+	addrinfos _addrinfos;
 	bool _owns;
     };
     
@@ -581,7 +578,7 @@ namespace inet {
     public:
 	template <protocol T = P, typename std::enable_if<is_tcp_prot<T>::value, int>::type* = nullptr>
 	client(const std::string& Host, unsigned short Port)
-	    : _host {Host}, _port {Port}, _servinfo {nullptr}, _close_sockfd {true} {
+	    : _host {Host}, _port {Port}, _addrinfos {nullptr, nullptr}, _owns {true} {
 	    addrinfo hints;
 	    std::memset(&hints, 0, sizeof hints);
 	    if (INET_IPV == 4) {
@@ -599,30 +596,29 @@ namespace inet {
 	    ss << _port;
 	    ss >> port;
 	    port[5] = 0;
-	    int rv = getaddrinfo(_host.c_str(), port, &hints, &_servinfo);
+	    int rv = getaddrinfo(_host.c_str(), port, &hints, &_addrinfos._infos);
 	    if (rv != 0) {
 		throw std::system_error {rv, std::system_category(), gai_strerror(rv)};
 	    }
-	    addrinfo* p;
-	    for (p = _servinfo; p != NULL; p = p->ai_next) {
-		_socket_fd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
+	    for (_addrinfos._p = _addrinfos._infos; _addrinfos._p != NULL; _addrinfos._p = _addrinfos._p->ai_next) {
+		_socket_fd = socket(_addrinfos._p->ai_family, _addrinfos._p->ai_socktype, _addrinfos._p->ai_protocol);
 		if (_socket_fd == -1) {
 		    // swallow error
 		    continue;
 		}
-		if (::connect(_socket_fd, p->ai_addr, p->ai_addrlen) == -1) {
+		if (::connect(_socket_fd, _addrinfos._p->ai_addr, _addrinfos._p->ai_addrlen) == -1) {
 		    close(_socket_fd);
 		    // swallow error
 		    continue;
 		}
 		break;
 	    }
-	    if (p == NULL) {
+	    if (_addrinfos._p == NULL) {
 		throw std::system_error {errno, std::system_category(), strerror(errno)};
 	    }
 	    char s[INET6_ADDRSTRLEN];
-	    const char* rvp = inet_ntop(p->ai_family,
-					get_in_addr((sockaddr*)p->ai_addr),
+	    const char* rvp = inet_ntop(_addrinfos._p->ai_family,
+					get_in_addr(reinterpret_cast<sockaddr*>(_addrinfos._p->ai_addr)),
 					s, sizeof s);
 	    if (rvp == NULL) {
 		throw std::system_error {errno, std::system_category(), strerror(errno)};
@@ -633,7 +629,7 @@ namespace inet {
 	}
 	template <protocol T = P, typename std::enable_if<is_udp_prot<T>::value, int>::type* = nullptr>
 	client (const std::string& Host, unsigned short Port)
-	    : _host {Host}, _port {Port}, _servinfo {nullptr}, _close_sockfd {true} {
+	    : _host {Host}, _port {Port}, _addrinfos {nullptr, nullptr}, _owns {true} {
 	    addrinfo hints;
 	    std::memset(&hints, 0, sizeof hints);
 	    if (INET_IPV == 4) {
@@ -651,54 +647,50 @@ namespace inet {
 	    ss << _port;
 	    ss >> port;
 	    port[5] = 0;
-	    int rv = getaddrinfo(_host.c_str(), port, &hints, &_servinfo);
+	    int rv = getaddrinfo(_host.c_str(), port, &hints, &_addrinfos._infos);
 	    if (rv != 0) {
 		throw std::system_error {rv, std::system_category(), gai_strerror(rv)};
 	    }
-	    addrinfo* p;
-	    for (p = _servinfo; p != NULL; p = p->ai_next) {
-		_socket_fd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
+	    for (_addrinfos._p = _addrinfos._infos; _addrinfos._p != NULL; _addrinfos._p = _addrinfos._p->ai_next) {
+		_socket_fd = socket(_addrinfos._p->ai_family, _addrinfos._p->ai_socktype, _addrinfos._p->ai_protocol);
 		if (_socket_fd == -1) {
 		    // swallow error
 		    continue;
 		}
 		break;
 	    }
-	    if (p == NULL) {
+	    if (_addrinfos._p == NULL) {
 		throw std::system_error {errno, std::system_category(), strerror(errno)};
 	    }
 	}
 	~client() {
-	    if(_close_sockfd) {
+	    if(_owns) {
 		close(_socket_fd);
-		if (_servinfo) {
-		    freeaddrinfo(_servinfo);
-		}
-		_servinfo = nullptr;
+		freeaddrinfo(_addrinfos._infos);
+		_addrinfos._infos = _addrinfos._p = nullptr;
 	    }
 	}
 	// enables "connect" if protocol is TCP
 	template <protocol T = P>
 	typename std::enable_if<is_tcp_prot<T>::value, inetstream<protocol::TCP>>::type
 	connect() {
-	    _close_sockfd = false;
-	    return inetstream<protocol::TCP> {_socket_fd, _servinfo};
+	    _owns = false;
+	    return inetstream<protocol::TCP> {_socket_fd, _addrinfos};
 	}
 	// enables "get_inetstream" if protocol is UDP
 	template <protocol T = P>
 	typename std::enable_if<is_udp_prot<T>::value, inetstream<protocol::UDP>>::type
 	get_inetstream() {
 	    // TODO: investigate if this is sufficient
-	    _close_sockfd = false;
-	    return inetstream<protocol::UDP> {_socket_fd, _servinfo};
+	    _owns = false;
+	    return inetstream<protocol::UDP> {_socket_fd, _addrinfos};
 	}
     private:
 	std::string _host;
 	unsigned short _port;
-	addrinfo* _servinfo;
+	addrinfos _addrinfos;
 	int _socket_fd;
-	bool _created_inetstream;
-	bool _close_sockfd;
+	bool _owns;
     };
 } // namespace inet
 #endif
