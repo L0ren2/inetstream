@@ -93,7 +93,7 @@ namespace inet {
 	}
 	~inetstream() {
 	    if (_socket_fd != -1) { close(_socket_fd); }
-	    freeaddrinfo(_addrinfos._infos); _addrinfos._infos = _addrinfos._p = nullptr;
+	    if (_owns) { freeaddrinfo(_addrinfos._infos); _addrinfos._infos = _addrinfos._p = nullptr; }
 	}
 	/**
 	 * push data onto the stream
@@ -324,8 +324,8 @@ namespace inet {
 	    do {
 		int sent_this_iter =
 		    ::sendto(_socket_fd, &_send_buf[_send_buf.size() - total], total, 0,
-			     reinterpret_cast<sockaddr*>(&_addrinfos._infos->ai_addr), _addrinfos._infos->ai_addrlen);
-		std::cout << "UDP::send(): " << __LINE__ << " sent: " << sent_this_iter << std::endl;
+			     _addrinfos._p->ai_addr, _addrinfos._p->ai_addrlen);
+		std::cout << "UDP::send(): " << __LINE__ << " sent " << sent_this_iter << " bytes to socket " << _socket_fd << std::endl;
 		if (sent_this_iter == -1) {
 		    throw std::system_error {errno, std::system_category(), strerror(errno)};
 		}
@@ -394,9 +394,11 @@ namespace inet {
 	    std::array<unsigned char, SZ> buf;
 	    std::size_t total {0};
 	    do {
+		std::cout << "udp::recv(): " << __LINE__ << " waiting to receive" << std::endl;
 		int num_recv =
 		    ::recvfrom(_socket_fd, &buf[0], SZ - 1, 0,
 			       reinterpret_cast<struct sockaddr*>(&remote_addr), &addr_len);
+		std::cout << "udp::recv(): " << __LINE__ << " received " << num_recv << std::endl;
 		if (num_recv > 0)
 		    total += num_recv;
 		if (num_recv == -1) {
@@ -417,9 +419,20 @@ namespace inet {
 	bool empty() const { return size() == 0; }
 	void clear() { _send_buf.clear(); _recv_buf.clear(); _read_pos = _recv_buf.begin(); }
 	std::size_t size() const { return _recv_buf.end() - _read_pos; }
+	/** 
+	 * blocks while now() < time_of_call + timeout and checks if data can be
+	 * recv()-ed
+	 *
+	 * @param timeout duration for which to wait for data to arrive
+	 *
+	 * @return true if data can be recv()-ed or false otherwise
+	 */
+	// bool select(std::chrono::milliseconds timeout) const {
+	//     poll() // TODO:
+	// }
     private:
-	inetstream(int socket_fd, addrinfos addrinfos) :
-	    _socket_fd {socket_fd}, _addrinfos {addrinfos}, _read_pos {_recv_buf.begin()} {}
+	inetstream(int socket_fd, addrinfos addrinfos, bool owns) :
+	    _socket_fd {socket_fd}, _addrinfos {addrinfos}, _read_pos {_recv_buf.begin()}, _owns {owns} {}
 	friend class server<P>;
 	friend class client<P>;
 	int _socket_fd;
@@ -427,6 +440,7 @@ namespace inet {
 	std::vector<byte> _send_buf;
 	std::vector<byte> _recv_buf;
 	std::vector<byte>::iterator _read_pos;
+	bool _owns;
     };
 
     template <protocol P>
@@ -555,16 +569,17 @@ namespace inet {
 		throw std::system_error {errno, std::system_category(), strerror(errno)};
 	    }
 	    // connected to s
-	    _owns = false;
-	    return inetstream<protocol::TCP> {new_fd, {nullptr, nullptr}};
+	    return inetstream<protocol::TCP> {new_fd, {nullptr, nullptr}, true};
 	}
 	// enables "get_inetstream" if protocol is UDP
 	template <protocol T = P>
 	typename std::enable_if<is_udp_prot<T>::value, inetstream<protocol::UDP>>::type get_inetstream() {
+	    if (fcntl(_socket_fd, F_SETFL, O_NONBLOCK) != 0) {
+		throw std::system_error {errno, std::system_category(), strerror(errno)};
+	    }
 	    // transfer ownership
-	    _owns = false;
 	    // TODO: this can not work
-	    return inetstream<protocol::UDP> {-1, _addrinfos};
+	    return inetstream<protocol::UDP> {_socket_fd, _addrinfos, false};
 	}
     private:
 	unsigned short _port;
@@ -662,6 +677,9 @@ namespace inet {
 	    if (_addrinfos._p == NULL) {
 		throw std::system_error {errno, std::system_category(), strerror(errno)};
 	    }
+	    if (fcntl(_socket_fd, F_SETFL, O_NONBLOCK) != 0) {
+		throw std::system_error {errno, std::system_category(), strerror(errno)};
+	    }
 	}
 	~client() {
 	    if(_owns) {
@@ -675,7 +693,7 @@ namespace inet {
 	typename std::enable_if<is_tcp_prot<T>::value, inetstream<protocol::TCP>>::type
 	connect() {
 	    _owns = false;
-	    return inetstream<protocol::TCP> {_socket_fd, _addrinfos};
+	    return inetstream<protocol::TCP> {_socket_fd, _addrinfos, true};
 	}
 	// enables "get_inetstream" if protocol is UDP
 	template <protocol T = P>
@@ -683,7 +701,7 @@ namespace inet {
 	get_inetstream() {
 	    // TODO: investigate if this is sufficient
 	    _owns = false;
-	    return inetstream<protocol::UDP> {_socket_fd, _addrinfos};
+	    return inetstream<protocol::UDP> {_socket_fd, _addrinfos, true};
 	}
     private:
 	std::string _host;
