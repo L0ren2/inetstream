@@ -573,3 +573,40 @@ TEST_CASE("server dies before client") {
     }
     t1.join(); 
 }
+TEST_CASE("inetstream::select") {
+    std::thread t1 {[] {
+	std::this_thread::sleep_for(std::chrono::milliseconds{10});
+	{
+	    inet::client<inet::protocol::TCP> client {"127.0.0.1", 3513};
+	    auto istr = client.connect();
+	    std::this_thread::sleep_for(std::chrono::milliseconds{100});
+	    istr << 1; istr.send();
+	    std::this_thread::sleep_for(std::chrono::milliseconds{5});
+	    istr.clear(); istr.recv(4);
+	    REQUIRE(istr.size() == 4);
+	    int i {0};
+	    istr >> i;
+	    REQUIRE(i == 42);
+	    // kill client
+	}
+    }};
+    {
+	inet::server<inet::protocol::TCP> server {3513};
+	auto istr = server.accept();
+	int tries = 25; // a bit extra time for scheduling reasons
+	do {
+	    if (istr.select(std::chrono::milliseconds{5}))
+		break;
+	} while (--tries);
+	REQUIRE(tries > 0);
+	istr.recv(4);
+	REQUIRE(istr.size() == 4);
+	int i {0};
+	istr >> i;
+	REQUIRE(i == 1);
+	istr.clear(); istr << 42;
+	istr.send();
+	std::this_thread::sleep_for(std::chrono::milliseconds{5});
+    }
+    t1.join();
+}

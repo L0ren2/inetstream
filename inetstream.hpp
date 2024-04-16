@@ -427,9 +427,21 @@ namespace inet {
 	 *
 	 * @return true if data can be recv()-ed or false otherwise
 	 */
-	// bool select(std::chrono::milliseconds timeout) const {
-	//     poll() // TODO:
-	// }
+	bool select(std::chrono::milliseconds timeout) const {
+	    struct timeval t {};
+	    t.tv_sec = std::chrono::duration_cast<std::chrono::seconds>(timeout).count();
+	    t.tv_usec = std::chrono::duration_cast<std::chrono::microseconds>(timeout).count();
+	    fd_set rfds {};
+	    FD_ZERO(&rfds);
+	    FD_SET(_socket_fd, &rfds);
+	    int rv = ::select(_socket_fd + 1, &rfds, nullptr, nullptr, &t);
+	    if (rv < 0) {
+		// error occured
+		throw std::system_error {errno, std::system_category(), strerror(errno)};
+	    }
+	    // 0 on timeout, 1 if socket is ready to recv
+	    return static_cast<bool>(rv);
+	}
     private:
 	inetstream(int socket_fd, addrinfos addrinfos, bool owns) :
 	    _socket_fd {socket_fd}, _addrinfos {addrinfos}, _read_pos {_recv_buf.begin()}, _owns {owns} {}
