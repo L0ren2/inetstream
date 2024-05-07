@@ -333,7 +333,8 @@ TEST_CASE("test receiving more than there is to get") {
     }};
     inet::server<inet::protocol::TCP> server{3506};
     auto istr = server.accept();
-    INFO("should receive 4 bytes even though 8 requested, because only 4 are sent");
+    INFO("should receive 4 bytes even though 8 requested, "
+	 "because only 4 are sent");
     REQUIRE(4 == istr.recv(8));
     int i;
     istr >> i;
@@ -348,17 +349,20 @@ TEST_CASE("test receiving twice, then reading all data on stream") {
 	int i_1 {42}, i_2 {1337};
 	istr << i_1;
 	istr.send();
-	std::this_thread::sleep_for(std::chrono::milliseconds{10});
+	std::this_thread::sleep_for(std::chrono::milliseconds{
+		INET_MAX_RECV_TIMEOUT_MS});
 	istr.clear();
 	istr << i_2;
 	istr.send();
     }};
     inet::server<inet::protocol::TCP> server{3507};
     auto istr = server.accept();
-    INFO("should receive 4 bytes even though 8 requested, because only 4 are sent");
+    INFO("should receive 4 bytes even though 8 requested, "
+	 "because only 4 are sent");
     REQUIRE(4 == istr.recv(8));
     REQUIRE(istr.size() == 4);
-    std::this_thread::sleep_for(std::chrono::milliseconds{10});
+    std::this_thread::sleep_for(std::chrono::milliseconds{
+	    INET_MAX_RECV_TIMEOUT_MS});
     REQUIRE(4 == istr.recv(8));
     INFO("if this fails, recv sets size incorrectly");
     REQUIRE(istr.size() == 8);
@@ -377,14 +381,16 @@ TEST_CASE("test receiving twice, but reading one by one") {
 	int i_1 {42}, i_2 {1337};
 	istr << i_1;
 	istr.send();
-	std::this_thread::sleep_for(std::chrono::milliseconds{10});
+	std::this_thread::sleep_for(std::chrono::milliseconds{
+		INET_MAX_RECV_TIMEOUT_MS});
 	istr.clear();
 	istr << i_2;
 	istr.send();
     }};
     inet::server<inet::protocol::TCP> server{3507};
     auto istr = server.accept();
-    INFO("should receive 4 bytes even though 8 requested, because only 4 are sent");
+    INFO("should receive 4 bytes even though 8 requested, "
+	 "because only 4 are sent");
     REQUIRE(4 == istr.recv(8));
     REQUIRE(istr.size() == 4);
     int i_1;
@@ -429,6 +435,7 @@ TEST_CASE("test default signal handler for leaving accept() call") {
     inet::server<inet::protocol::TCP> server {3509};
     try {
 	server.accept();
+	// unreachable by design
 	REQUIRE(false == true);
     }
     catch (const std::system_error& e) {
@@ -444,7 +451,8 @@ TEST_CASE("multiple clients") {
 	    inet::client<inet::protocol::TCP> client1 {"127.0.0.1", 3510};
 	    auto istr1 = client1.connect();
 	    istr1 << 1; istr1.send();
-	    std::this_thread::sleep_for(std::chrono::milliseconds{50});
+	    std::this_thread::sleep_for(std::chrono::milliseconds{
+		    INET_MAX_RECV_TIMEOUT_MS});
 	    istr1.clear(); istr1.recv(4);
 	    REQUIRE(istr1.size() == 4);
 	    int i {0};
@@ -459,7 +467,8 @@ TEST_CASE("multiple clients") {
 	    inet::client<inet::protocol::TCP> client2 {"127.0.0.1", 3510};
 	    auto istr2 = client2.connect();
 	    istr2 << 2; istr2.send();
-	    std::this_thread::sleep_for(std::chrono::milliseconds{50});
+	    std::this_thread::sleep_for(std::chrono::milliseconds{
+		    INET_MAX_RECV_TIMEOUT_MS});
 	    istr2.clear(); istr2.recv(4);
 	    REQUIRE(istr2.size() == 4);
 	    int i {0};
@@ -498,7 +507,8 @@ TEST_CASE("multiple clients 2") {
 	    inet::client<inet::protocol::TCP> client1 {"127.0.0.1", 3511};
 	    auto istr1 = client1.connect();
 	    istr1 << 1; istr1.send();
-	    std::this_thread::sleep_for(std::chrono::milliseconds{50});
+	    std::this_thread::sleep_for(std::chrono::milliseconds{
+		    INET_MAX_RECV_TIMEOUT_MS});
 	    istr1.clear(); istr1.recv(4);
 	    REQUIRE(istr1.size() == 4);
 	    int i {0};
@@ -513,7 +523,8 @@ TEST_CASE("multiple clients 2") {
 	    inet::client<inet::protocol::TCP> client2 {"127.0.0.1", 3511};
 	    auto istr2 = client2.connect();
 	    istr2 << 2; istr2.send();
-	    std::this_thread::sleep_for(std::chrono::milliseconds{50});
+	    std::this_thread::sleep_for(std::chrono::milliseconds{
+		    INET_MAX_RECV_TIMEOUT_MS});
 	    istr2.clear(); istr2.recv(4);
 	    REQUIRE(istr2.size() == 4);
 	    int i {0};
@@ -609,4 +620,35 @@ TEST_CASE("inetstream::select") {
 	std::this_thread::sleep_for(std::chrono::milliseconds{5});
     }
     t1.join();
+}
+TEST_CASE("early return from recv()") {
+    std::thread t1 {[] {
+	std::this_thread::sleep_for(std::chrono::milliseconds{10});
+	inet::client<inet::protocol::TCP> client {"127.0.0.1", 3514};
+	auto istr = client.connect();
+	istr << 1; istr.send();
+	istr.clear();
+	istr.recv(4);
+	REQUIRE(istr.size() == 4);
+	int i {0};
+	istr >> i;
+	REQUIRE(i == 42);
+    }};
+    using namespace std::chrono;
+    auto start_t = system_clock::now();
+    {
+	inet::server<inet::protocol::TCP> server {3514};
+	auto istr = server.accept();
+	istr.recv(4);
+	REQUIRE(istr.size() == 4);
+	int i {0};
+	istr >> i;
+	REQUIRE(i == 1);
+	istr.clear(); istr << 42;
+	istr.send();
+    }
+    t1.join();
+    auto end_t = system_clock::now();
+    REQUIRE(duration_cast<milliseconds>(end_t - start_t).count()
+	    <= INET_MAX_RECV_TIMEOUT_MS);
 }
