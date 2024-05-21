@@ -1,8 +1,8 @@
 * Inetstream
 C++11 Stream interface for easy networking
 ** What this is
-A simple header only networking API to send and receive simple messages from
-Linux to Linux
+A simple header only networking API for sending / receiving simple TCP / UDP
+messages from Linux to Linux
 ** What this is not (yet)
 An elaborate cross plattform messaging toolkit to send abstracted but typesafe
 internet messages supporting TCP as well as UDP from one network peer to the
@@ -10,6 +10,7 @@ next, and it's all header only
 ** Examples
 For examples please refer to the [[./test/test_tcp.cpp][TCP tests]] and [[./test/test_udp.cpp][UDP tests]] respectively. 
 ** TODO Things left to be done
-[ ] proper UDP support and tests
-[ ] revisit TODO comments about sufficientness and freeaddrinfo
-[ ] support for other platforms
+[ ] allow UDP "servers" to send messages to UDP "clients" and UDP "clients" to
+recv said messages
+[ ] check for leaks using valgrind
+[ ] wider OS support

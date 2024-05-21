@@ -110,8 +110,9 @@ namespace inet {
 				&& !std::is_same<T, uint64_t>::value
 				&& !std::is_same<T, int>::value
 				&& !std::is_same<T, std::string>::value
-				&& !std::is_same<T, const char[]>::value
-				&& !std::is_same<T, const char*>::value, inetstream<P>&>::type
+				&& !std::is_same<typename std::remove_const<T>::type, char[]>::value
+				&& !std::is_same<typename std::remove_const<T>::type, char*>::value,
+				inetstream<P>&>::type
 	operator<<(T t) {
 	    unsigned char chars[sizeof(T)];
 	    std::memcpy(&chars[0], &t, sizeof(T));
@@ -130,8 +131,8 @@ namespace inet {
 				&& !std::is_same<T, uint64_t>::value
 				&& !std::is_same<T, int>::value
 				&& !std::is_same<T, std::string>::value
-				&& !std::is_same<T, const char[]>::value
-				&& !std::is_same<T, const char*>::value, void>::type
+				&& !std::is_same<typename std::remove_const<T>::type, char[]>::value
+				&& !std::is_same<typename std::remove_const<T>::type, char*>::value, void>::type
 	operator>>(T& t) {
 	    if (this->size() < sizeof(T)) {
 		std::stringstream ss;
@@ -320,12 +321,12 @@ namespace inet {
 	    } while (total > 0);
 	    this->clear();
 	}
-	template <protocol T = P>
-	typename std::enable_if<is_udp_prot<T>::value, void>::type
 	/**					       
 	 * sends data pushed into the stream over the network to remote
 	 *
 	 */
+	template <protocol T = P>
+	typename std::enable_if<is_udp_prot<T>::value, void>::type
 	send() {
 	    std::chrono::milliseconds timeout {INET_MAX_SEND_TIMEOUT_MS};
 	    auto t_end = std::chrono::system_clock::now() + timeout;
@@ -334,7 +335,6 @@ namespace inet {
 		int sent_this_iter =
 		    ::sendto(_socket_fd, &_send_buf[_send_buf.size() - total], total, 0,
 			     _addrinfos.p->ai_addr, _addrinfos.p->ai_addrlen);
-		std::cout << "UDP::send(): " << __LINE__ << " sent " << sent_this_iter << " bytes to socket " << _socket_fd << std::endl;
 		if (sent_this_iter == -1) {
 		    throw std::system_error {errno, std::system_category(), strerror(errno)};
 		}
@@ -342,9 +342,7 @@ namespace inet {
 		    throw std::runtime_error {"timeout reached"};
 		}
 		total -= sent_this_iter;
-	    std::cout << "UDP::send(): " << __LINE__ << std::endl;
 	    } while (total > 0);
-	    std::cout << "UDP::send(): " << __LINE__ << std::endl;
 	}
 	/**
 	 * receives network data, populating the stream with data
@@ -403,7 +401,6 @@ namespace inet {
 	template <protocol T = P>
 	typename std::enable_if<is_udp_prot<T>::value, std::size_t>::type
 	recv() {
-	    std::cout << "udp::recv(): called" << std::endl;
 	    std::chrono::milliseconds timeout {INET_MAX_RECV_TIMEOUT_MS};
 	    // cache offset because recv may cause _recv_buf to realloc
 	    auto read_offset_ = _read_pos - _recv_buf.begin(); 
@@ -415,15 +412,10 @@ namespace inet {
 	    if (this->select(timeout)) {
 		num_recv = ::recvfrom(_socket_fd, &buf[0], SZ - 1, 0,
 				      reinterpret_cast<struct sockaddr*>(&remote_addr), &addr_len);
-		std::cout << "udp::recv(): " << __LINE__ << " received " << num_recv << std::endl;
-	    }
-	    else {
-		std::cout << "udp::recv(): select() failed" << std::endl;
 	    }
 	    if (num_recv == -1) {
 		throw std::system_error {errno, std::system_category(), strerror(errno)};
 	    }
-	    std::cout << "after recv(): got " << num_recv << " bytes" << std::endl;
 	    if (num_recv == 0)
 		return 0;
 	    _recv_buf.insert(_recv_buf.end(), buf.begin(), buf.begin() + num_recv);
@@ -447,8 +439,8 @@ namespace inet {
 	 */
 	bool select(std::chrono::milliseconds timeout) const {
 	    struct timeval t {};
-	    t.tv_sec = std::chrono::duration_cast<std::chrono::seconds>(timeout).count();
-	    t.tv_usec = std::chrono::duration_cast<std::chrono::microseconds>(timeout).count();
+	    t.tv_sec = timeout.count() / 1000;
+	    t.tv_usec = (timeout.count() - t.tv_sec * 1000) * 1000;
 	    fd_set rfds {};
 	    FD_ZERO(&rfds);
 	    FD_SET(_socket_fd, &rfds);
@@ -603,9 +595,11 @@ namespace inet {
 				       get_in_addr(reinterpret_cast<sockaddr*>(&client_addr)),
 				       s, sizeof s);
 	    if (rv == NULL) {
+		close(new_fd);
 		throw std::system_error {errno, std::system_category(), strerror(errno)};
 	    }
 	    if (fcntl(new_fd, F_SETFL, O_NONBLOCK) != 0) {
+		close(new_fd);
 		throw std::system_error {errno, std::system_category(), strerror(errno)};
 	    }
 	    // connected to s
@@ -617,13 +611,9 @@ namespace inet {
 	 */
 	// enables "get_inetstream" if protocol is UDP
 	template <protocol T = P>
-	typename std::enable_if<is_udp_prot<T>::value, inetstream<protocol::UDP>>::type get_inetstream() {
-	    // if (fcntl(_socket_fd, F_SETFL, O_NONBLOCK) != 0) {
-	    // 	throw std::system_error {errno, std::system_category(), strerror(errno)};
-	    // }
-
-	    // transfer ownership
-	    // TODO: this might not work
+	typename std::enable_if<is_udp_prot<T>::value, inetstream<protocol::UDP>>::type
+	get_inetstream() {
+	    // don't transfer ownership
 	    return inetstream<protocol::UDP> {_socket_fd, _addrinfos, /*owns*/false};
 	}
     private:
@@ -749,10 +739,6 @@ namespace inet {
 		freeaddrinfo(infos);
 		throw std::system_error {errno, std::system_category(), strerror(errno)};
 	    }
-	    // if (fcntl(_socket_fd, F_SETFL, O_NONBLOCK) != 0) {
-	    // 	freeaddrinfo(infos);
-	    // 	throw std::system_error {errno, std::system_category(), strerror(errno)};
-	    // }
 	    return inetstream<protocol::UDP> {_socket_fd, addrinfos {infos, p}, /*owns*/true};
 	}
     private:
