@@ -652,3 +652,27 @@ TEST_CASE("early return from recv()") {
     REQUIRE(duration_cast<milliseconds>(end_t - start_t).count()
 	    <= INET_MAX_RECV_TIMEOUT_MS);
 }
+TEST_CASE("floating point") {
+    std::thread t1 {[] {
+	inet::client<inet::protocol::TCP> client {"127.0.0.1", 3260};
+	std::this_thread::sleep_for(std::chrono::milliseconds{1});
+	auto istr = client.connect();
+	istr.recv(sizeof(double) + sizeof(float));
+	double d {};
+	float f {};
+	istr >> d;
+	istr >> f;
+	const auto ABS = [](double x) { return (x > 0) ? (x) : -(x); };
+	const auto ABSf = [](float x) { return (x > 0) ? (x) : -(x); };
+	REQUIRE(ABS(d - 3.1415926535) < 0.0000001);
+	REQUIRE(ABSf(f - 3.14136f) < 0.0003f);
+    }};
+    inet::server<inet::protocol::TCP> server {3260};
+    auto istr = server.accept();
+    double d {3.1415926535};
+    float f {42 / 13.37f};
+    istr << d;
+    istr << f;
+    istr.send();
+    t1.join();
+}
