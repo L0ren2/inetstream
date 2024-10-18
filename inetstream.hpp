@@ -47,37 +47,37 @@
 #endif
 
 namespace inet {
-    inline void sigusr1_handler(int signal) {
+	inline void sigusr1_handler(int signal) {
 		if (INET_PRINT_SIGUSR1) {
 			std::cout << "inet::sigusr1_handler() was called (signal=" << signal << ")" << std::endl;
 		}
-    }
+	}
 
-    inline void* get_in_addr(sockaddr* sa) {
+	inline void* get_in_addr(sockaddr* sa) {
 		if (sa->sa_family == AF_INET) {
 			return &((reinterpret_cast<sockaddr_in*>(sa))->sin_addr);
 		}
 		return &((reinterpret_cast<sockaddr_in6*>(sa))->sin6_addr);
-    }
-    typedef unsigned char byte;
+	}
+	typedef unsigned char byte;
     
-    enum class protocol {
+	enum class protocol {
 		TCP, UDP
-    };
-    // "type" traits
-    template <protocol P> struct is_tcp_prot { static constexpr const bool value = std::false_type::value; };
-    template <> struct is_tcp_prot<protocol::TCP> { static constexpr const bool value = std::true_type::value; };
-    template <protocol P> struct is_udp_prot { static constexpr const bool value = std::false_type::value; };
-    template <> struct is_udp_prot<protocol::UDP> { static constexpr const bool value = std::true_type::value; };
-    // forward decl
-    struct addrinfos {
+	};
+	// "type" traits
+	template <protocol P> struct is_tcp_prot { static constexpr const bool value = std::false_type::value; };
+	template <> struct is_tcp_prot<protocol::TCP> { static constexpr const bool value = std::true_type::value; };
+	template <protocol P> struct is_udp_prot { static constexpr const bool value = std::false_type::value; };
+	template <> struct is_udp_prot<protocol::UDP> { static constexpr const bool value = std::true_type::value; };
+	// forward decl
+	struct addrinfos {
 		struct addrinfo* infos, *p;
-    };
-    template <protocol P> class server;
-    template <protocol P> class client;
-    template <protocol P>
-    class inetstream {
-    public:
+	};
+	template <protocol P> class server;
+	template <protocol P> class client;
+	template <protocol P>
+	class inetstream {
+	public:
 		inetstream() = delete;
 		inetstream(const inetstream<P>&) = delete;
 		inetstream(inetstream<P>&& other) : _socket_fd {other._socket_fd} {
@@ -98,24 +98,24 @@ namespace inet {
 				freeaddrinfo(_addrinfos.infos);
 				_addrinfos.infos = _addrinfos.p = nullptr;
 			}
-	    }
+		}
 		/**
 		 * push data onto the stream
 		 *
 		 */
 		template <typename T>
 		typename std::enable_if<!std::is_same<T, uint16_t>::value
-								&& !std::is_same<T, uint32_t>::value
-								&& !std::is_same<T, uint64_t>::value
+		                        && !std::is_same<T, uint32_t>::value
+		                        && !std::is_same<T, uint64_t>::value
 		                        && !std::is_same<T, int16_t>::value
-								&& !std::is_same<T, int32_t>::value
-								&& !std::is_same<T, int64_t>::value
-								&& !std::is_same<T, float>::value
-								&& !std::is_same<T, double>::value
-								&& !std::is_same<T, std::string>::value
-								&& !std::is_same<typename std::remove_const<T>::type, char[]>::value
-								&& !std::is_same<typename std::remove_const<T>::type, char*>::value,
-								inetstream<P>&>::type
+		                        && !std::is_same<T, int32_t>::value
+		                        && !std::is_same<T, int64_t>::value
+		                        && !std::is_same<T, float>::value
+		                        && !std::is_same<T, double>::value
+		                        && !std::is_same<T, std::string>::value
+		                        && !std::is_same<typename std::remove_const<T>::type, char[]>::value
+		                        && !std::is_same<typename std::remove_const<T>::type, char*>::value,
+		                        inetstream<P>&>::type
 		operator<<(T t) {
 			unsigned char chars[sizeof(T)];
 			std::memcpy(&chars[0], &t, sizeof(T));
@@ -130,16 +130,16 @@ namespace inet {
 		 */
 		template <typename T>
 		typename std::enable_if<!std::is_same<T, uint16_t>::value
-								&& !std::is_same<T, uint32_t>::value
-								&& !std::is_same<T, uint64_t>::value
+		                        && !std::is_same<T, uint32_t>::value
+		                        && !std::is_same<T, uint64_t>::value
 		                        && !std::is_same<T, int16_t>::value
-								&& !std::is_same<T, int32_t>::value
-								&& !std::is_same<T, int64_t>::value
-								&& !std::is_same<T, float>::value
-								&& !std::is_same<T, double>::value
-								&& !std::is_same<T, std::string>::value
-								&& !std::is_same<typename std::remove_const<T>::type, char[]>::value
-								&& !std::is_same<typename std::remove_const<T>::type, char*>::value, void>::type
+		                        && !std::is_same<T, int32_t>::value
+		                        && !std::is_same<T, int64_t>::value
+		                        && !std::is_same<T, float>::value
+		                        && !std::is_same<T, double>::value
+		                        && !std::is_same<T, std::string>::value
+		                        && !std::is_same<typename std::remove_const<T>::type, char[]>::value
+		                        && !std::is_same<typename std::remove_const<T>::type, char*>::value, void>::type
 		operator>>(T& t) {
 			if (this->size() < sizeof(T)) {
 				std::stringstream ss;
@@ -200,20 +200,20 @@ namespace inet {
 		inetstream<P>& operator<< (int64_t ll) {
 			return this->operator<<(static_cast<uint64_t>(ll));
 		}
-	    inetstream<P>& operator<< (float f) {
-		    static_assert(sizeof(float) == sizeof(uint32_t), "sizeof float not supported");
-		    uint32_t ul {};
-		    std::memcpy(&ul, &f, sizeof(float));
-		    *this << ul;
-		    return *this;
-	    }
-	    inetstream<P>& operator<< (double d) {
-		    static_assert(sizeof(double) == sizeof(uint64_t), "sizeof double not supported");
-		    uint64_t ull {};
-		    std::memcpy(&ull, &d, sizeof(double));
-		    *this << ull;
-		    return *this;
-	    }
+		inetstream<P>& operator<< (float f) {
+			static_assert(sizeof(float) == sizeof(uint32_t), "sizeof float not supported");
+			uint32_t ul {};
+			std::memcpy(&ul, &f, sizeof(float));
+			*this << ul;
+			return *this;
+		}
+		inetstream<P>& operator<< (double d) {
+			static_assert(sizeof(double) == sizeof(uint64_t), "sizeof double not supported");
+			uint64_t ull {};
+			std::memcpy(&ull, &d, sizeof(double));
+			*this << ull;
+			return *this;
+		}
 		inetstream<P>& operator<< (std::string s) {
 			for (const char c : s) {
 				this->_send_buf.push_back(c);
@@ -294,18 +294,18 @@ namespace inet {
 			this->operator>>(ull);
 			ll = static_cast<int64_t>(ull);
 		}
-	    void operator>> (float& f) {
-		    static_assert(sizeof(float) == sizeof(uint32_t), "sizeof float not supported");
-		    uint32_t ul {};
-		    *this >> ul;
-		    std::memcpy(&f, &ul, sizeof(float));
-	    }
-	    void operator>> (double& d) {
-		    static_assert(sizeof(double) == sizeof(uint64_t), "sizeof double not supported");
-		    uint64_t ull {};
-		    *this >> ull;
-		    std::memcpy(&d, &ull, sizeof(double));
-	    }
+		void operator>> (float& f) {
+			static_assert(sizeof(float) == sizeof(uint32_t), "sizeof float not supported");
+			uint32_t ul {};
+			*this >> ul;
+			std::memcpy(&f, &ul, sizeof(float));
+		}
+		void operator>> (double& d) {
+			static_assert(sizeof(double) == sizeof(uint64_t), "sizeof double not supported");
+			uint64_t ull {};
+			*this >> ull;
+			std::memcpy(&d, &ull, sizeof(double));
+		}
 		void operator>> (std::string& s) {
 			s.clear();
 			while (this->size() > 0) {
@@ -354,7 +354,7 @@ namespace inet {
 			do {
 				int sent_this_iter =
 					::sendto(_socket_fd, &_send_buf[_send_buf.size() - total], total, 0,
-							 _addrinfos.p->ai_addr, _addrinfos.p->ai_addrlen);
+					         _addrinfos.p->ai_addr, _addrinfos.p->ai_addrlen);
 				if (sent_this_iter == -1) {
 					throw std::system_error {errno, std::system_category(), strerror(errno)};
 				}
@@ -431,7 +431,7 @@ namespace inet {
 			int num_recv {0};
 			if (this->select(timeout)) {
 				num_recv = ::recvfrom(_socket_fd, &buf[0], SZ - 1, 0,
-									  reinterpret_cast<struct sockaddr*>(&remote_addr), &addr_len);
+				                      reinterpret_cast<struct sockaddr*>(&remote_addr), &addr_len);
 			}
 			if (num_recv == -1) {
 				throw std::system_error {errno, std::system_category(), strerror(errno)};
@@ -472,7 +472,7 @@ namespace inet {
 			// 0 on timeout, 1 if socket is ready to recv
 			return static_cast<bool>(rv);
 		}
-    private:
+	private:
 		inetstream(int socket_fd, addrinfos addrinfos, bool owns) :
 			_socket_fd {socket_fd}, _addrinfos {addrinfos}, _read_pos {_recv_buf.begin()}, _owns {owns} {}
 		friend class server<P>;
@@ -483,11 +483,11 @@ namespace inet {
 		std::vector<byte> _recv_buf;
 		std::vector<byte>::iterator _read_pos;
 		bool _owns;
-    };
+	};
 
-    template <protocol P>
-    class server {
-    public:
+	template <protocol P>
+	class server {
+	public:
 		template <protocol T = P, typename std::enable_if<is_tcp_prot<T>::value, int>::type* = nullptr>
 		server(unsigned short Port) : _port {Port}, _addrinfos {nullptr, nullptr} {
 			if (INET_USE_DEFAULT_SIGUSR1_HANDLER) {
@@ -612,8 +612,8 @@ namespace inet {
 			}
 			char s[INET6_ADDRSTRLEN];
 			const char* rv = inet_ntop(client_addr.ss_family,
-									   get_in_addr(reinterpret_cast<sockaddr*>(&client_addr)),
-									   s, sizeof s);
+			                           get_in_addr(reinterpret_cast<sockaddr*>(&client_addr)),
+			                           s, sizeof s);
 			if (rv == NULL) {
 				close(new_fd);
 				throw std::system_error {errno, std::system_category(), strerror(errno)};
@@ -636,15 +636,15 @@ namespace inet {
 			// don't transfer ownership
 			return inetstream<protocol::UDP> {_socket_fd, _addrinfos, /*owns*/false};
 		}
-    private:
+	private:
 		unsigned short _port;
 		int _socket_fd;
 		addrinfos _addrinfos;
-    };
+	};
     
-    template <protocol P>
-    class client {
-    public:
+	template <protocol P>
+	class client {
+	public:
 		template <protocol T = P, typename std::enable_if<is_tcp_prot<T>::value, int>::type* = nullptr>
 		client(const std::string& Host, unsigned short Port)
 			: _host {Host}, _port {Port} {}
@@ -761,10 +761,10 @@ namespace inet {
 			}
 			return inetstream<protocol::UDP> {_socket_fd, addrinfos {infos, p}, /*owns*/true};
 		}
-    private:
+	private:
 		std::string _host;
 		unsigned short _port;
 		int _socket_fd;
-    };
+	};
 } // namespace inet
 #endif
