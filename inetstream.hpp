@@ -21,7 +21,6 @@
 #include <signal.h>
 #include <fcntl.h>
 
-
 // users may override these
 #ifndef INET_MAX_CONNECTIONS
 #define INET_MAX_CONNECTIONS 10
@@ -99,7 +98,7 @@ namespace inet {
 				freeaddrinfo(_addrinfos.infos);
 				_addrinfos.infos = _addrinfos.p = nullptr;
 			}
-		}
+	    }
 		/**
 		 * push data onto the stream
 		 *
@@ -108,7 +107,11 @@ namespace inet {
 		typename std::enable_if<!std::is_same<T, uint16_t>::value
 								&& !std::is_same<T, uint32_t>::value
 								&& !std::is_same<T, uint64_t>::value
-								&& !std::is_same<T, int>::value
+		                        && !std::is_same<T, int16_t>::value
+								&& !std::is_same<T, int32_t>::value
+								&& !std::is_same<T, int64_t>::value
+								&& !std::is_same<T, float>::value
+								&& !std::is_same<T, double>::value
 								&& !std::is_same<T, std::string>::value
 								&& !std::is_same<typename std::remove_const<T>::type, char[]>::value
 								&& !std::is_same<typename std::remove_const<T>::type, char*>::value,
@@ -129,7 +132,11 @@ namespace inet {
 		typename std::enable_if<!std::is_same<T, uint16_t>::value
 								&& !std::is_same<T, uint32_t>::value
 								&& !std::is_same<T, uint64_t>::value
-								&& !std::is_same<T, int>::value
+		                        && !std::is_same<T, int16_t>::value
+								&& !std::is_same<T, int32_t>::value
+								&& !std::is_same<T, int64_t>::value
+								&& !std::is_same<T, float>::value
+								&& !std::is_same<T, double>::value
 								&& !std::is_same<T, std::string>::value
 								&& !std::is_same<typename std::remove_const<T>::type, char[]>::value
 								&& !std::is_same<typename std::remove_const<T>::type, char*>::value, void>::type
@@ -183,8 +190,8 @@ namespace inet {
 				uint64_t i;
 				byte b[sz];
 			} u {0};
-			u.i  = static_cast<uint64_t>(htonl((ull & 0xffffffff00000000) >> 32)) << 32;
-			u.i |= htonl(ull & 0x00000000ffffffff);
+			u.i  = static_cast<uint64_t>(htonl((ull & 0xffffffff00000000) >> 32));
+			u.i |= static_cast<uint64_t>(htonl(ull & 0x00000000ffffffff)) << 32;
 			for (std::size_t s {0}; s < sz; ++s) {
 				this->_send_buf.push_back(u.b[s]);
 			}
@@ -193,6 +200,20 @@ namespace inet {
 		inetstream<P>& operator<< (int64_t ll) {
 			return this->operator<<(static_cast<uint64_t>(ll));
 		}
+	    inetstream<P>& operator<< (float f) {
+		    static_assert(sizeof(float) == sizeof(uint32_t), "sizeof float not supported");
+		    uint32_t ul {};
+		    std::memcpy(&ul, &f, sizeof(float));
+		    *this << ul;
+		    return *this;
+	    }
+	    inetstream<P>& operator<< (double d) {
+		    static_assert(sizeof(double) == sizeof(uint64_t), "sizeof double not supported");
+		    uint64_t ull {};
+		    std::memcpy(&ull, &d, sizeof(double));
+		    *this << ull;
+		    return *this;
+	    }
 		inetstream<P>& operator<< (std::string s) {
 			for (const char c : s) {
 				this->_send_buf.push_back(c);
@@ -260,19 +281,31 @@ namespace inet {
 			}
 			uint32_t tmp {0};
 			uint64_t utmp {0};
-			// lsb
-			*this >> tmp;
-			utmp = tmp;
 			// msb
 			*this >> tmp;
+			utmp = static_cast<uint64_t>(tmp) << 32;
+			// lsb
+			*this >> tmp;
 			// bitshift operators already take care of ntohl stuff
-			ull = utmp | static_cast<uint64_t>(tmp) << 32;
+			ull = utmp | tmp;
 		}
 		void operator>> (int64_t& ll) {
-			uint32_t ull {};
+			uint64_t ull {};
 			this->operator>>(ull);
 			ll = static_cast<int64_t>(ull);
 		}
+	    void operator>> (float& f) {
+		    static_assert(sizeof(float) == sizeof(uint32_t), "sizeof float not supported");
+		    uint32_t ul {};
+		    *this >> ul;
+		    std::memcpy(&f, &ul, sizeof(float));
+	    }
+	    void operator>> (double& d) {
+		    static_assert(sizeof(double) == sizeof(uint64_t), "sizeof double not supported");
+		    uint64_t ull {};
+		    *this >> ull;
+		    std::memcpy(&d, &ull, sizeof(double));
+	    }
 		void operator>> (std::string& s) {
 			s.clear();
 			while (this->size() > 0) {
