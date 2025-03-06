@@ -593,6 +593,49 @@ namespace inet {
 			freeaddrinfo(_addrinfos.infos);
 			_addrinfos.infos = _addrinfos.p = nullptr;
 		}
+		/**
+		 * set the underlying socket to non-blocking mode.
+		 * @throws std::system_error if an error occurs
+		 */
+		template <protocol T = P>
+		typename std::enable_if<is_tcp_prot<T>::value>::type set_nonblocking() {
+			if (fcntl(_socket_fd, F_SETFD, O_NONBLOCK)) {
+				throw std::system_error {errno, std::system_category(), strerror(errno)};
+			}
+		}
+		/**
+		 * if using select() before set_nonblocking() has been called, the
+		 * behaviour is undefined.
+		 *
+		 * blocks while now() < time_of_call + timeout and checks if a client
+		 * can be accept()-ed without blocking.
+		 *
+		 * @param timeout duration for which to wait for client to connect()
+		 *
+		 * @return early true if client can be accept()-ed or false after
+		 * timeout expired otherwise
+		 *
+		 * @throws std::system_error if ::select() encounters an error
+		 *
+		 */
+		template <protocol T = P>
+		typename std::enable_if<is_tcp_prot<T>::value, bool>::type
+		select(std::chrono::milliseconds timeout) const {
+			struct timeval t {};
+			t.tv_sec = timeout.count() / 1000;
+			t.tv_usec = (timeout.count() - t.tv_sec * 1000) * 1000;
+			fd_set rfds {};
+			FD_ZERO(&rfds);
+			FD_SET(_socket_fd, &rfds);
+			int rv = ::select(_socket_fd + 1, &rfds, nullptr, nullptr, &t);
+			if (rv == 0) {
+				return false;
+			}
+			if (rv > 0) {
+				return true;
+			}
+			throw std::system_error {errno, std::system_category(), strerror(errno)};
+		}
 		/** 
 		 * blocks until a client connects. 
 		 *

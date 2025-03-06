@@ -735,3 +735,31 @@ TEST_CASE("floating point") {
 	istr.send();
 	t1.join();
 }
+TEST_CASE("non-blocking accept") {
+	std::thread t1 {[] {
+		std::this_thread::sleep_for(std::chrono::seconds{1});
+		inet::client<inet::protocol::TCP> client {"127.0.0.1", 3261};
+		auto istr = client.connect();
+		istr.recv(sizeof(uint32_t));
+		uint32_t i;
+		istr >> i;
+		REQUIRE(i == 42);
+		istr.clear();
+		istr << 1337;
+		istr.send();
+	}};
+	inet::server<inet::protocol::TCP> server {3261};
+	server.set_nonblocking();
+	bool s = server.select(std::chrono::milliseconds{100});
+	REQUIRE_FALSE(s);
+	if (!server.select(std::chrono::seconds{2})) {
+		throw std::runtime_error {"timeout!"};
+	}
+	auto istr = server.accept();
+	istr << 42; istr.send();
+	istr.recv(sizeof(uint32_t));
+	uint32_t i;
+	istr >> i;
+	REQUIRE(i == 1337);
+	t1.join();
+}
