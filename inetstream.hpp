@@ -80,7 +80,9 @@ class inetstream {
 public:
 	inetstream() = delete;
 	inetstream(const inetstream<P>&) = delete;
-	inetstream(inetstream<P>&& other) : _socket_fd {other._socket_fd} {
+	inetstream(inetstream<P>&& other)
+		: _socket_fd {other._socket_fd}, _owns {other._owns}
+	{
 		other._socket_fd = -1;
 		_addrinfos.infos = other._addrinfos.infos;
 		_addrinfos.p = other._addrinfos.p;
@@ -473,8 +475,10 @@ public:
 		return static_cast<bool>(rv);
 	}
 private:
-	inetstream(int socket_fd, addrinfos addrinfos, bool owns) :
-		_socket_fd {socket_fd}, _addrinfos {addrinfos}, _read_pos {_recv_buf.begin()}, _owns {owns} {}
+	inetstream(int socket_fd, addrinfos addrinfos, bool owns)
+		: _socket_fd {socket_fd}, _addrinfos {addrinfos}, _read_pos {_recv_buf.begin()}, _owns {owns}
+	{
+	}
 	friend class server<P>;
 	friend class client<P>;
 	int _socket_fd;
